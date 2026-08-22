@@ -33,7 +33,10 @@ import webbrowser
 from pathlib import Path
 
 import numpy as np
-import sounddevice as sd
+try:
+    import sounddevice as sd
+except (ImportError, OSError):
+    sd = None
 
 from config import env_bool, env_float, env_int, env_str
 from engine_bridge import ask_ai_engine, get_current_engine, set_current_engine
@@ -522,6 +525,9 @@ def handle_voice_interaction(input_device: int | None = None) -> None:
 # --- Main Double-Clap Listener ----------------------------------------------
 
 def main() -> int:
+    if sd is None:
+        log.error("Audio input is unavailable. Install PortAudio to run voice mode.")
+        return 1
     blocksize = block_samples()
     noise_floor = 1e-4
     last_logged_double = 0.0

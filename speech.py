@@ -13,7 +13,10 @@ import wave
 from pathlib import Path
 
 import numpy as np
-import sounddevice as sd
+try:
+    import sounddevice as sd
+except (ImportError, OSError):
+    sd = None
 
 from config import BASE_DIR, env_bool, env_float, env_str
 
@@ -77,6 +80,8 @@ def _tts_cache_path(text: str, voice_id: str, model_id: str, output_format: str)
 
 
 def _play_pcm_wav_file(path: Path) -> bool:
+    if sd is None:
+        return False
     try:
         with wave.open(str(path), "rb") as wf:
             ch = wf.getnchannels()

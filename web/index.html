@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIRVIS // Control Room</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">A</span><span>AIRVIS</span><small>LOCAL INTELLIGENCE</small></div>
+      <div class="connection"><i></i><span id="connectionText">LOCAL LINK</span><b id="clock">--:--:--</b></div>
+    </header>
+
+    <section class="hero-grid">
+      <div class="orb-panel">
+        <div class="eyebrow">CORE VISUALIZER / 01</div>
+        <div class="orb-wrap" id="orbWrap"><canvas id="orb" aria-label="자비스 상태 시각화"></canvas><div class="orb-label"><strong id="stateLabel">STANDBY</strong><span id="stateHint">DOUBLE CLAP READY</span></div></div>
+        <div class="telemetry"><span><em id="signal">98</em>% SIGNAL</span><span>LATENCY <em id="latency">--</em> MS</span><span>UPTIME <em id="uptime">LOCAL</em></span></div>
+      </div>
+      <div class="command-panel">
+        <div class="eyebrow">COMMAND DECK / 02</div>
+        <h1>무엇을<br><span>실행할까요?</span></h1>
+        <p class="subcopy">텍스트 명령을 보내거나 자비스의 음성으로 응답을 재생하세요.</p>
+        <form id="commandForm"><textarea id="command" rows="3" placeholder="예: 유튜브 열어줘" autocomplete="off"></textarea><div class="form-row"><span class="hint">ENTER TO EXECUTE · SHIFT+ENTER NEW LINE</span><div class="command-buttons"><button type="button" class="voice-button" id="voiceButton" title="음성 명령 듣기"><span>◉</span> LISTEN</button><button type="submit"><span>EXECUTE</span><b>↗</b></button></div></div></form>
+        <div id="response" class="response" aria-live="polite"><span class="response-dot"></span><span>명령 대기 중</span></div>
+      </div>
+    </section>
+
+    <section class="lower-grid">
+      <div class="quick-panel"><div class="section-head"><div><div class="eyebrow">QUICK ACTIONS / 03</div><h2>자주 쓰는 명령</h2></div><span class="count">06 READY</span></div><div class="actions">
+        <button data-command="크롬 열어줘"><span class="action-icon">⌕</span><span>Chrome</span><small>OPEN BROWSER</small></button>
+        <button data-command="유튜브 열어줘"><span class="action-icon">▶</span><span>YouTube</span><small>OPEN VIDEO</small></button>
+        <button data-command="스포티파이 켜줘"><span class="action-icon">♫</span><span>Spotify</span><small>PLAY MUSIC</small></button>
+        <button data-command="커서 열어줘"><span class="action-icon">⌘</span><span>Cursor</span><small>OPEN EDITOR</small></button>
+        <button data-command="클로드 열어줘"><span class="action-icon">✦</span><span>Claude</span><small>OPEN ASSISTANT</small></button>
+        <button data-command="바이낸스 열어줘"><span class="action-icon">₿</span><span>Binance</span><small>OPEN MARKET</small></button>
+      </div></div>
+      <aside class="settings-panel"><div class="section-head"><div><div class="eyebrow">SYSTEM TUNING / 04</div><h2>세팅</h2></div><button class="save" id="saveSettings">SAVE</button></div>
+        <div class="settings-scroll"><label class="toggle-row"><span><b>AI AGENT</b><small>OPENCLAW ROUTING</small></span><input type="checkbox" id="JARVIS_AGENT_ENABLED"><i></i></label><label class="toggle-row"><span><b>CONVERSATION MODE</b><small>MULTI-TURN VOICE SESSION</small></span><input type="checkbox" id="JARVIS_CONVERSATION_MODE"><i></i></label><label class="field"><span>WAKE PROMPT</span><input id="JARVIS_WAKE_PROMPT"></label><label class="field"><span>CHROME URL</span><input id="JARVIS_CHROME_URL"></label><label class="field"><span>YOUTUBE URL</span><input id="JARVIS_YOUTUBE_URL"></label><label class="field"><span>STT PROVIDER</span><select id="JARVIS_STT_PROVIDER"><option value="speech_recognition">Google Speech</option><option value="openai">OpenAI Whisper</option></select></label><label class="field"><span>STT LANGUAGE</span><input id="JARVIS_STT_LANGUAGE"></label><div class="range-row"><label>VAD THRESHOLD <output id="thresholdOutput"></output><input type="range" id="JARVIS_VAD_THRESHOLD" min="0.005" max="0.1" step="0.001"></label><label>SILENCE WINDOW <output id="silenceOutput"></output><input type="range" id="JARVIS_VAD_SILENCE_SECONDS" min="0.1" max="2" step="0.1"></label></div></div>
+      </aside>
+    </section>
+    <footer><span>AIRVIS OS / v1.0</span><span>SECURE LOCAL INSTANCE · 127.0.0.1</span><span>DOUBLE CLAP TO WAKE</span></footer>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
