@@ -416,6 +416,10 @@ def handle_engine_command(command: str) -> str | None:
     Handle voice commands to dynamically check or switch AI engines (OpenClaw, Hermes, Grokbot).
     """
     c = command.lower().strip()
+    if any(term in c for term in ("native", "airvis agent", "에어비스 자체", "네이티브")):
+        if any(w in c for w in ("엔진", "바꿔", "변경", "스위치", "켜", "전환", "선택", "사용")):
+            name = set_current_engine("native")
+            return f"AI 엔진을 {name}로 변경했습니다."
     # Check engine switch
     if "에르메스" in c or "hermes" in c:
         if any(w in c for w in ("엔진", "바꿔", "변경", "스위치", "켜", "전환", "선택", "사용")):

@@ -8,6 +8,38 @@
 
 ## 📌 주요 특징
 
+### AIRVIS Native Runtime
+
+기존 OpenClaw/Hermes/Grok 호환 경로를 유지하면서 `native` 엔진을 선택하면 AIRVIS 자체 Runtime이 세션, Mock/OpenAI-compatible Provider, workspace 제한 Tool, 메모리와 권한 상태를 관리합니다. 외부 API 키 없이도 기본 동작을 검증할 수 있습니다.
+
+```bash
+AI_ENGINE=native python3 jarvis.py
+python3 -m airvis.cli status
+python3 -m airvis.cli tools
+python3 -m airvis.cli chat "hello"
+python3 -m airvis.cli agents
+python3 -m airvis.cli plugins
+python3 -m airvis.cli doctor
+```
+
+Web API에는 `/health`, `/api/providers`, `/api/tools`, `/api/memory`, `/api/chat`, `/api/agent/run`, `/api/tools/execute`가 추가되었습니다. `AIRVIS_PROVIDER=ollama`와 `OLLAMA_MODEL`을 설정하면 OpenAI-compatible Ollama endpoint를 사용할 수 있습니다.
+
+Native Runtime은 `/api/agents`, `/api/agents/delegate`, `/api/plugins`, `/api/tasks`, `/api/scheduler`를 통해 Agent 위임, Plugin 검색, Task와 1회 예약 작업을 제공합니다.
+
+WebSocket은 별도 프로세스로 실행합니다.
+
+```bash
+python3 websocket_server.py
+```
+
+기본 주소는 `ws://127.0.0.1:8766`이며 `assistant.state`, `assistant.message`, `error` 이벤트를 전송합니다. Provider Manager는 등록 순서대로 실패한 Provider를 건너뛰고 다음 Provider를 시도합니다.
+
+원격 바인딩 시에는 `AIRVIS_API_TOKEN`을 설정하고 요청에 `Authorization: Bearer <token>`을 포함해야 합니다. 토큰 없이 원격 바인딩하면 모든 요청이 거부됩니다.
+
+Model Catalog는 `/api/models`에서 확인할 수 있고, 환경 점검은 `python3 -m airvis.cli doctor` 또는 `/api/doctor`로 실행합니다.
+
+Provider 장애 대비 fallback은 `AIRVIS_FALLBACK_PROVIDER=ollama`처럼 설정합니다. Native Runtime은 주 Provider 실패 시 fallback Provider를 순서대로 시도합니다.
+
 * **👏 더블 박수(Double-Clap) 웨이크업**: 마이크로 두 번의 박수를 감지하면 즉시 자비스가 깨어납니다.
 * **⚡ 초고속 실시간 음성 대화 (VAD)**: 말이 끝나면 0.5초 만에 자동으로 감지하여 지연 없이 빠르게 응답합니다.
 * **🚀 멀티 AI 엔진 지원 (Multi-Engine)**:
@@ -96,8 +128,10 @@ python3 web_server.py
 
 #### 2) Python 3.10+ 환경 및 패키지 설치
 ```bash
-python3 -m pip install -r requirements.txt
+python3 -m pip install -e .
 ```
+
+이후 `airvis` 명령을 직접 사용할 수 있습니다. 음성 기능까지 사용하려면 기존 `requirements.txt`도 설치하세요.
 
 ---
 

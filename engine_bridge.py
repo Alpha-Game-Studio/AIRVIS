@@ -27,7 +27,10 @@ def get_current_engine() -> str:
 def set_current_engine(engine_name: str) -> str:
     global _current_engine
     e = engine_name.lower().strip()
-    if e in {"hermes", "에르메스", "nous", "nous-hermes", "hermes-agent"}:
+    if e in {"native", "airvis", "native-agent", "airvis-agent"}:
+        _current_engine = "native"
+        return "AIRVIS Native Agent"
+    elif e in {"hermes", "에르메스", "nous", "nous-hermes", "hermes-agent"}:
         _current_engine = "hermes"
         return "에르메스(Hermes Agent)"
     elif e in {"grok", "grokbot", "그록", "그록봇", "xai", "grok-bot"}:
@@ -344,6 +347,14 @@ def ask_ai_engine(command: str, engine: str | None = None) -> str:
     """
     active = (engine or get_current_engine()).lower().strip()
 
+    if active in {"native", "airvis", "native-agent"}:
+        from airvis.runtime import AgentRuntime
+
+        global _native_runtime
+        if _native_runtime is None:
+            _native_runtime = AgentRuntime()
+        return _native_runtime.run(command)
+
     if active in {"hermes", "에르메스", "hermes-agent"}:
         log.info("Querying Hermes Agent: %s", command)
         return ask_hermes(command)
@@ -353,3 +364,6 @@ def ask_ai_engine(command: str, engine: str | None = None) -> str:
     else:
         log.info("Querying OpenClaw Engine: %s", command)
         return ask_openclaw(command)
+
+
+    _native_runtime = None

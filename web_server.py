@@ -18,13 +18,18 @@ from urllib.parse import urlparse
 
 import config
 import jarvis
+from airvis.runtime import AgentRuntime
 
 
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
 HOST = os.environ.get("AIRVIS_HOST", "127.0.0.1")
 PORT = int(os.environ.get("AIRVIS_PORT", "8765"))
+API_TOKEN = os.environ.get("AIRVIS_API_TOKEN", "").strip()
 COMMAND_LOCK = threading.Lock()
+TTS_LOCK = threading.Lock()
+TTS_ACTIVE = threading.Event()
+NATIVE_RUNTIME = AgentRuntime()
 
 SETTING_DEFINITIONS = {
     "JARVIS_AGENT_ENABLED": ("bool", True),
@@ -113,6 +118,18 @@ def update_settings(payload: dict[str, object]) -> dict[str, object]:
     return settings_payload()
 
 
+def _speak_async(text: str) -> None:
+    def worker() -> None:
+        with TTS_LOCK:
+            TTS_ACTIVE.set()
+            try:
+                jarvis.speak_text(text)
+            finally:
+                TTS_ACTIVE.clear()
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 class AirvisHandler(BaseHTTPRequestHandler):
     server_version = "AIRVIS/1.0"
 
@@ -132,14 +149,74 @@ class AirvisHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         return json.loads(self.rfile.read(length) or b"{}")
 
+    def _authorized(self) -> bool:
+        protected = bool(API_TOKEN) or HOST not in {"127.0.0.1", "localhost", "::1"}
+        if not protected:
+            return True
+        header = self.headers.get("Authorization", "")
+        return bool(API_TOKEN) and header == f"Bearer {API_TOKEN}"
+
     def do_GET(self) -> None:
+        if not self._authorized():
+            self._send_json({"error": "authentication required"}, HTTPStatus.UNAUTHORIZED)
+            return
         path = urlparse(self.path).path
         if path == "/api/status":
             self._send_json({
                 "state": "busy" if jarvis._voice_session_active.is_set() else "standby",
+                "tts": "speaking" if TTS_ACTIVE.is_set() else "idle",
+                "engine": jarvis.get_current_engine(),
                 "settings": settings_payload(),
                 "time": time.time(),
+                "native": NATIVE_RUNTIME.status(),
             })
+            return
+        if path == "/health":
+            self._send_json({"ok": True})
+            return
+        if path == "/api/providers":
+            self._send_json({"providers": NATIVE_RUNTIME.provider_manager.list()})
+            return
+        if path == "/api/models":
+            self._send_json({"models": NATIVE_RUNTIME.catalog.list()})
+            return
+        if path == "/api/doctor":
+            from airvis.doctor import run_checks
+            self._send_json({"checks": run_checks()})
+            return
+        if path == "/api/costs":
+            self._send_json({"total": NATIVE_RUNTIME.costs.total})
+            return
+        if path == "/api/tools":
+            self._send_json({"tools": NATIVE_RUNTIME.tools.list()})
+            return
+        if path == "/api/memory":
+            self._send_json({"memory": NATIVE_RUNTIME.memory.list()})
+            return
+        if path == "/api/sessions":
+            self._send_json({"sessions": NATIVE_RUNTIME.sessions.list()})
+            return
+        if path == "/api/agents/status":
+            self._send_json({"status": NATIVE_RUNTIME.status(), "agents": NATIVE_RUNTIME.agents.list()})
+            return
+        if path == "/api/tasks/cancel":
+            NATIVE_RUNTIME.cancel()
+            self._send_json({"cancelled": True, "status": NATIVE_RUNTIME.status()})
+            return
+        if path == "/api/tasks":
+            self._send_json({"tasks": NATIVE_RUNTIME.task_list()})
+            return
+        if path == "/api/scheduler":
+            self._send_json({"jobs": NATIVE_RUNTIME.scheduled_jobs()})
+            return
+        if path == "/api/agents":
+            self._send_json({"agents": NATIVE_RUNTIME.agents.list()})
+            return
+        if path == "/api/plugins":
+            self._send_json({"plugins": NATIVE_RUNTIME.plugins.list()})
+            return
+        if path == "/api/engine":
+            self._send_json({"engine": jarvis.get_current_engine()})
             return
         if path == "/api/settings":
             self._send_json({"settings": settings_payload()})
@@ -157,6 +234,9 @@ class AirvisHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:
+        if not self._authorized():
+            self._send_json({"error": "authentication required"}, HTTPStatus.UNAUTHORIZED)
+            return
         try:
             payload = self._read_json()
             if self.path == "/api/command":
@@ -165,14 +245,67 @@ class AirvisHandler(BaseHTTPRequestHandler):
                     raise ValueError("command is required")
                 with COMMAND_LOCK:
                     response = jarvis.handle_command(command)
+                if payload.get("speak", False):
+                    _speak_async(response)
                 self._send_json({"response": response})
+                return
+            if self.path in {"/api/chat", "/api/agent/run"}:
+                command = str(payload.get("message", payload.get("command", ""))).strip()
+                if not command:
+                    raise ValueError("message is required")
+                self._send_json({"response": NATIVE_RUNTIME.run(command), "status": NATIVE_RUNTIME.status()})
+                return
+            if self.path == "/api/tasks":
+                prompt = str(payload.get("prompt", "")).strip()
+                if not prompt:
+                    raise ValueError("prompt is required")
+                task = NATIVE_RUNTIME.create_task(prompt)
+                if payload.get("run", False):
+                    response = NATIVE_RUNTIME.run_task(task.id)
+                    self._send_json({"task": task.id, "response": response, "status": NATIVE_RUNTIME.status()})
+                else:
+                    self._send_json({"task": task.id, "tasks": NATIVE_RUNTIME.task_list()})
+                return
+            if self.path == "/api/scheduler":
+                prompt = str(payload.get("prompt", "")).strip()
+                delay = float(payload.get("delay_seconds", 0))
+                if not prompt or delay < 0:
+                    raise ValueError("prompt and a non-negative delay_seconds are required")
+                self._send_json({"job": NATIVE_RUNTIME.schedule_once(prompt, delay)})
+                return
+            if self.path == "/api/scheduler/cancel":
+                self._send_json({"cancelled": NATIVE_RUNTIME.cancel_job(str(payload.get("job", "")))})
+                return
+            if self.path == "/api/agents/delegate":
+                role = str(payload.get("role", "")).strip()
+                prompt = str(payload.get("prompt", "")).strip()
+                if not role or not prompt:
+                    raise ValueError("role and prompt are required")
+                self._send_json({"response": NATIVE_RUNTIME.agents.delegate(role, prompt, NATIVE_RUNTIME)})
+                return
+            if self.path == "/api/tools/execute":
+                result = NATIVE_RUNTIME.execute_tool(str(payload.get("name", "")), payload.get("arguments", {}), bool(payload.get("confirm", False)))
+                self._send_json({"result": result, "status": NATIVE_RUNTIME.status()})
+                return
+            if self.path == "/api/memory":
+                content = str(payload.get("content", "")).strip()
+                if not content:
+                    raise ValueError("content is required")
+                self._send_json({"id": NATIVE_RUNTIME.memory.add(content)})
                 return
             if self.path == "/api/speak":
                 text = str(payload.get("text", "")).strip()
                 if not text:
                     raise ValueError("text is required")
-                threading.Thread(target=jarvis.speak_text, args=(text,), daemon=True).start()
+                _speak_async(text)
                 self._send_json({"ok": True})
+                return
+            if self.path == "/api/engine":
+                engine = str(payload.get("engine", "")).strip()
+                if engine not in {"openclaw", "hermes", "grokbot"}:
+                    raise ValueError("engine must be openclaw, hermes, or grokbot")
+                response = jarvis.handle_engine_command(f"{engine} 엔진으로 전환")
+                self._send_json({"engine": jarvis.get_current_engine(), "response": response})
                 return
             if self.path == "/api/settings":
                 self._send_json({"settings": update_settings(payload)}, HTTPStatus.OK)
@@ -180,6 +313,8 @@ class AirvisHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except PermissionError as exc:
+            self._send_json({"error": str(exc), "confirmation_required": True}, HTTPStatus.CONFLICT)
         except Exception as exc:
             self._send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 

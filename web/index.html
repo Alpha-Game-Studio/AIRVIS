@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AIRVIS // Control Room</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/runtime.css">
 </head>
 <body>
   <main class="shell">
@@ -17,6 +18,7 @@
       <div class="orb-panel">
         <div class="eyebrow">CORE VISUALIZER / 01</div>
         <div class="orb-wrap" id="orbWrap"><canvas id="orb" aria-label="자비스 상태 시각화"></canvas><div class="orb-label"><strong id="stateLabel">STANDBY</strong><span id="stateHint">DOUBLE CLAP READY</span></div></div>
+        <div class="engine-strip"><span class="engine-title">ACTIVE ENGINE <b id="engineLabel">OPENCLAW</b></span><div class="engine-buttons"><button type="button" data-engine="openclaw">OPENCLAW</button><button type="button" data-engine="hermes">HERMES</button><button type="button" data-engine="grokbot">GROKBOT</button></div></div>
         <div class="telemetry"><span><em id="signal">98</em>% SIGNAL</span><span>LATENCY <em id="latency">--</em> MS</span><span>UPTIME <em id="uptime">LOCAL</em></span></div>
       </div>
       <div class="command-panel">
@@ -26,6 +28,11 @@
         <form id="commandForm"><textarea id="command" rows="3" placeholder="예: 유튜브 열어줘" autocomplete="off"></textarea><div class="form-row"><span class="hint">ENTER TO EXECUTE · SHIFT+ENTER NEW LINE</span><div class="command-buttons"><button type="button" class="voice-button" id="voiceButton" title="음성 명령 듣기"><span>◉</span> LISTEN</button><button type="submit"><span>EXECUTE</span><b>↗</b></button></div></div></form>
         <div id="response" class="response" aria-live="polite"><span class="response-dot"></span><span>명령 대기 중</span></div>
       </div>
+    </section>
+    <section class="runtime-grid" aria-label="AIRVIS runtime status">
+      <article class="runtime-panel"><div class="eyebrow">RUNTIME / 05</div><h2>AGENTS</h2><div id="agentsPanel">불러오는 중...</div></article>
+      <article class="runtime-panel"><div class="eyebrow">ROUTING / 06</div><h2>PROVIDERS & MODELS</h2><div id="providersPanel">불러오는 중...</div><div id="modelsPanel"></div></article>
+      <article class="runtime-panel"><div class="eyebrow">WORK / 07</div><h2>TASKS & MEMORY</h2><div id="tasksPanel">불러오는 중...</div><div id="memoryPanel"></div></article>
     </section>
 
     <section class="lower-grid">
@@ -41,7 +48,7 @@
         <div class="settings-scroll"><label class="toggle-row"><span><b>AI AGENT</b><small>OPENCLAW ROUTING</small></span><input type="checkbox" id="JARVIS_AGENT_ENABLED"><i></i></label><label class="toggle-row"><span><b>CONVERSATION MODE</b><small>MULTI-TURN VOICE SESSION</small></span><input type="checkbox" id="JARVIS_CONVERSATION_MODE"><i></i></label><label class="field"><span>WAKE PROMPT</span><input id="JARVIS_WAKE_PROMPT"></label><label class="field"><span>CHROME URL</span><input id="JARVIS_CHROME_URL"></label><label class="field"><span>YOUTUBE URL</span><input id="JARVIS_YOUTUBE_URL"></label><label class="field"><span>STT PROVIDER</span><select id="JARVIS_STT_PROVIDER"><option value="speech_recognition">Google Speech</option><option value="openai">OpenAI Whisper</option></select></label><label class="field"><span>STT LANGUAGE</span><input id="JARVIS_STT_LANGUAGE"></label><div class="range-row"><label>VAD THRESHOLD <output id="thresholdOutput"></output><input type="range" id="JARVIS_VAD_THRESHOLD" min="0.005" max="0.1" step="0.001"></label><label>SILENCE WINDOW <output id="silenceOutput"></output><input type="range" id="JARVIS_VAD_SILENCE_SECONDS" min="0.1" max="2" step="0.1"></label></div></div>
       </aside>
     </section>
-    <footer><span>AIRVIS OS / v1.0</span><span>SECURE LOCAL INSTANCE · 127.0.0.1</span><span>DOUBLE CLAP TO WAKE</span></footer>
+    <footer><span>AIRVIS OS / v4.0</span><span>SECURE LOCAL INSTANCE · 127.0.0.1</span><span>DOUBLE CLAP TO WAKE</span></footer>
   </main>
   <script src="/app.js"></script>
 </body>

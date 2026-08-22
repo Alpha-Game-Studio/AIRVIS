@@ -123,6 +123,23 @@ def _save_pcm_wav_file(path: Path, pcm_bytes: bytes, sample_rate: int) -> None:
         raise
 
 
+def _play_pcm_bytes(pcm_bytes: bytes, sample_rate: int) -> bool:
+    if sd is None:
+        log.warning("Audio playback is unavailable; install sounddevice to play ElevenLabs audio.")
+        return False
+    if not pcm_bytes:
+        return False
+    pcm_i16 = np.frombuffer(pcm_bytes, dtype=np.int16)
+    pcm_f = pcm_i16.astype(np.float32) / 32768.0
+    try:
+        sd.play(pcm_f, sample_rate)
+        sd.wait()
+        return True
+    except Exception as exc:
+        log.warning("Audio playback error: %s", exc)
+        return False
+
+
 def _system_tts_fallback(text: str) -> bool:
     """Fallback to native operating system TTS."""
     clean = clean_text_for_speech(text)
@@ -181,8 +198,6 @@ def speak_text(text: str) -> bool:
 
     # 2. Try ElevenLabs API
     api_key = env_str("ELEVENLABS_API_KEY")
-    elevenlabs_success = False
-
     if api_key and voice_id:
         try:
             from elevenlabs.client import ElevenLabs
@@ -201,21 +216,19 @@ def speak_text(text: str) -> bool:
                         _save_pcm_wav_file(cache_path, raw, pcm_rate)
                     except OSError as exc:
                         log.warning("Could not save TTS cache: %s", exc)
-                pcm_i16 = np.frombuffer(raw, dtype=np.int16)
-                pcm_f = pcm_i16.astype(np.float32) / 32768.0
-                sd.play(pcm_f, pcm_rate)
-                sd.wait()
-                return True
+                if _play_pcm_bytes(raw, pcm_rate):
+                    return True
         except Exception as exc:
             log.warning(
                 "ElevenLabs TTS failed (%s). Falling back to native system voice...", exc
             )
 
     # 3. Fallback to native system voice if ElevenLabs fails or is unconfigured
-    if not elevenlabs_success:
-        return _system_tts_fallback(spoken_text)
-
-    return True
+    if not api_key:
+        log.warning("ELEVENLABS_API_KEY is not configured; using native system voice.")
+    elif not voice_id:
+        log.warning("ELEVENLABS_VOICE_ID is not configured; using native system voice.")
+    return _system_tts_fallback(spoken_text)
 
 
 # --- Real-Time VAD (Voice Activity Detection) STT --------------------------

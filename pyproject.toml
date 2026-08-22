@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "airvis"
+version = "4.0.0"
+description = "AIRVIS native AI agent runtime"
+requires-python = ">=3.10"
+dependencies = [
+	"numpy>=1.24,<3",
+	"python-dotenv>=1.0,<2",
+	"websockets>=13",
+]
+
+[project.scripts]
+airvis = "airvis.cli:main"
+
+[tool.setuptools]
+packages = ["airvis"]
