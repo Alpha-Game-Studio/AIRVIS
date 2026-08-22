@@ -454,19 +454,10 @@ def handle_command(command: str) -> str:
         log.info("Executing local desktop command: %s", command)
         return execute_local_command(command)
 
-<<<<<<< HEAD
     # 3. Active AI Engine Query (OpenClaw / Hermes / Grokbot)
     active_engine = get_current_engine()
     log.info("Routing command to [%s]: %s", active_engine, command)
     return ask_ai_engine(command, engine=active_engine)
-=======
-    if not JARVIS_AGENT_ENABLED:
-        log.info("OpenClaw agent is disabled; ignoring command: %s", command)
-        return "AI 에이전트 기능이 비활성화되어 있습니다."
-
-    log.info("Routing command to OpenClaw: %s", command)
-    return ask_openclaw(command)
->>>>>>> f95c510 (FIX SOME BUGS)
 
 
 # --- Voice Interaction Pipeline ---------------------------------------------
