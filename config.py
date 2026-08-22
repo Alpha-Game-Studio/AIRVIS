@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import math
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -22,7 +23,8 @@ def env_float(name: str, default: float) -> float:
     if not value:
         return default
     try:
-        return float(value)
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else default
     except ValueError:
         return default
 

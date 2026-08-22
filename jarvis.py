@@ -387,12 +387,12 @@ def execute_local_command(command: str) -> str:
     Execute quick local desktop automations directly in Jarvis.
     """
     c = command.lower().strip()
-    if "스포티파이" in c or "spotify" in c or "노래" in c or "음악" in c:
-        play_song(SONG_URI)
-        return "스포티파이를 실행하고 음악을 재생합니다."
     if "유튜브" in c or "youtube" in c:
         _open_url_in_chrome(JARVIS_YOUTUBE_URL, new_window=True, label="YouTube")
         return "유튜브를 열었습니다."
+    if "스포티파이" in c or "spotify" in c or "노래" in c or "음악" in c:
+        play_song(SONG_URI)
+        return "스포티파이를 실행하고 음악을 재생합니다."
     if "클로드" in c or "claude" in c:
         open_claude_in_chrome()
         return "Claude를 열었습니다."
@@ -451,21 +451,30 @@ def handle_command(command: str) -> str:
         log.info("Executing local desktop command: %s", command)
         return execute_local_command(command)
 
+<<<<<<< HEAD
     # 3. Active AI Engine Query (OpenClaw / Hermes / Grokbot)
     active_engine = get_current_engine()
     log.info("Routing command to [%s]: %s", active_engine, command)
     return ask_ai_engine(command, engine=active_engine)
+=======
+    if not JARVIS_AGENT_ENABLED:
+        log.info("OpenClaw agent is disabled; ignoring command: %s", command)
+        return "AI 에이전트 기능이 비활성화되어 있습니다."
+
+    log.info("Routing command to OpenClaw: %s", command)
+    return ask_openclaw(command)
+>>>>>>> f95c510 (FIX SOME BUGS)
 
 
 # --- Voice Interaction Pipeline ---------------------------------------------
 
 def is_exit_phrase(phrase: str) -> bool:
-    c = phrase.lower().strip()
-    exit_words = {"종료", "끝", "그만", "stop", "bye", "exit", "quit", "취소", "닫아줘", "안녕히"}
-    return any(w in c for w in exit_words)
+    c = re.sub(r"[^a-z0-9가-힣]+", "", phrase.lower())
+    exit_phrases = {"종료", "끝", "그만", "stop", "bye", "exit", "quit", "취소", "닫아줘", "안녕히"}
+    return c in exit_phrases
 
 
-def handle_voice_interaction() -> None:
+def handle_voice_interaction(input_device: int | None = None) -> None:
     """
     Wake-up -> STT -> Command Routing -> TTS -> Optional Multi-turn Loop.
     """
@@ -481,7 +490,7 @@ def handle_voice_interaction() -> None:
         conversation_mode = JARVIS_CONVERSATION_MODE
         while True:
             # 2. Listen & Transcribe
-            command_text = listen_and_transcribe()
+            command_text = listen_and_transcribe(input_device)
             if not command_text:
                 if not conversation_mode:
                     speak_text(JARVIS_STT_FAILURE_PROMPT)
@@ -532,61 +541,63 @@ def main() -> int:
     input_idx = _choose_input_device(blocksize)
 
     try:
-        with sd.InputStream(
-            device=input_idx,
-            samplerate=SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="float32",
-            blocksize=blocksize,
-        ) as stream:
-            while True:
-                # If currently interacting via voice, pause clap detection
-                if _voice_session_active.is_set():
-                    time.sleep(0.1)
-                    first_clap_time = None
-                    continue
+        while True:
+            activate_voice = False
+            with sd.InputStream(
+                device=input_idx,
+                samplerate=SAMPLE_RATE,
+                channels=CHANNELS,
+                dtype="float32",
+                blocksize=blocksize,
+            ) as stream:
+                while True:
+                    data, overflowed = stream.read(blocksize)
+                    if overflowed:
+                        log.warning("Input overflow; try a larger BLOCK_MS")
 
-                data, overflowed = stream.read(blocksize)
-                if overflowed:
-                    log.warning("Input overflow; try a larger BLOCK_MS")
+                    level = rms_mono(data)
 
-                level = rms_mono(data)
+                    quiet_gate = noise_floor * QUIET_GATE_MULT
+                    if level < quiet_gate:
+                        noise_floor = NOISE_FLOOR_ALPHA * noise_floor + (
+                            1.0 - NOISE_FLOOR_ALPHA
+                        ) * level
+                        noise_floor = max(noise_floor, 1e-7)
 
-                quiet_gate = noise_floor * QUIET_GATE_MULT
-                if level < quiet_gate:
-                    noise_floor = NOISE_FLOOR_ALPHA * noise_floor + (
-                        1.0 - NOISE_FLOOR_ALPHA
-                    ) * level
-                    noise_floor = max(noise_floor, 1e-7)
+                    threshold = max(noise_floor * SPIKE_RATIO, MIN_RMS)
+                    now = time.monotonic()
+                    retrigger_level = threshold * RETRIGGER_RATIO
 
-                threshold = max(noise_floor * SPIKE_RATIO, MIN_RMS)
-                now = time.monotonic()
-                retrigger_level = threshold * RETRIGGER_RATIO
+                    if level < retrigger_level:
+                        spike_armed = True
 
-                if level < retrigger_level:
-                    spike_armed = True
-
-                if (
-                    spike_armed
-                    and level >= threshold
-                    and (now - last_logged_double) >= COOLDOWN_S
-                ):
-                    spike_armed = False
-                    if first_clap_time is None:
-                        first_clap_time = now
-                    else:
-                        gap = now - first_clap_time
-                        if gap < MIN_DOUBLE_GAP_S:
-                            pass
-                        elif gap <= MAX_DOUBLE_GAP_S:
-                            first_clap_time = None
-                            last_logged_double = now
-                            print("\n👏 👏 [Double Clap Detected!] Activating Jarvis...")
-                            threading.Thread(
-                                target=handle_voice_interaction, daemon=True
-                            ).start()
-                        else:
+                    if (
+                        spike_armed
+                        and level >= threshold
+                        and (now - last_logged_double) >= COOLDOWN_S
+                    ):
+                        spike_armed = False
+                        if first_clap_time is None:
                             first_clap_time = now
+                        else:
+                            gap = now - first_clap_time
+                            if gap < MIN_DOUBLE_GAP_S:
+                                pass
+                            elif gap <= MAX_DOUBLE_GAP_S:
+                                first_clap_time = None
+                                last_logged_double = now
+                                activate_voice = True
+                                print(
+                                    "\n👏 👏 [Double Clap Detected!] Activating Jarvis..."
+                                )
+                                break
+                            else:
+                                first_clap_time = now
+
+            if activate_voice:
+                handle_voice_interaction(input_idx)
+                first_clap_time = None
+                spike_armed = True
 
     except KeyboardInterrupt:
         log.info("Jarvis shutting down. Goodbye, sir.")

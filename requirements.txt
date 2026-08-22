@@ -4,4 +4,5 @@ elevenlabs>=1.50,<3
 websockets>=13
 python-dotenv>=1.0,<2
 SpeechRecognition>=3.10.0
+openai>=1.0,<2
 

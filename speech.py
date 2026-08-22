@@ -56,6 +56,9 @@ def elevenlabs_env_config() -> tuple[str, str, str, int]:
     voice = env_str("ELEVENLABS_VOICE_ID", "pNInz6obpgDQGcFmaJgB")
     model = env_str("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
     fmt = env_str("ELEVENLABS_OUTPUT_FORMAT", "pcm_24000")
+    if not fmt.startswith("pcm_"):
+        log.warning("Unsupported ElevenLabs output format %s; using pcm_24000.", fmt)
+        fmt = "pcm_24000"
     rate = _elevenlabs_pcm_sample_rate(fmt)
     return voice, model, fmt, rate
 
@@ -128,20 +131,20 @@ def _system_tts_fallback(text: str) -> bool:
             if preferred_voice:
                 cmd.extend(["-v", preferred_voice])
             cmd.append(clean)
-            subprocess.run(cmd, check=False)
-            return True
+            return subprocess.run(cmd, check=False).returncode == 0
         elif sys.platform == "win32":
             clean_text = clean.replace('"', '""').replace("`", "``")
             ps_script = f'Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $synth.Speak("{clean_text}");'
-            subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], check=False)
-            return True
+            return subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_script], check=False
+            ).returncode == 0
         elif sys.platform.startswith("linux"):
             if shutil.which("spd-say"):
-                subprocess.run(["spd-say", clean], check=False)
-                return True
+                return subprocess.run(["spd-say", clean], check=False).returncode == 0
             elif shutil.which("espeak"):
-                subprocess.run(["espeak", "-v", "ko", clean], check=False)
-                return True
+                return subprocess.run(
+                    ["espeak", "-v", "ko", clean], check=False
+                ).returncode == 0
     except Exception as exc:
         log.warning("System TTS fallback error: %s", exc)
     return False
@@ -225,7 +228,7 @@ def _resolve_input_device_index() -> int | None:
     return None
 
 
-def _record_vad_wav(path: Path) -> bool:
+def _record_vad_wav(path: Path, input_device: int | None = None) -> bool:
     """
     Real-time microphone stream with energy-based Voice Activity Detection (VAD).
     Immediately stops recording when the user finishes speaking (silence detected).
@@ -233,7 +236,8 @@ def _record_vad_wav(path: Path) -> bool:
     sample_rate = 16000
     chunk_samples = 512  # 32ms per chunk
     channels = 1
-    input_device = _resolve_input_device_index()
+    if input_device is None:
+        input_device = _resolve_input_device_index()
 
     speech_threshold = env_float("JARVIS_VAD_THRESHOLD", 0.025)
     silence_limit_s = env_float("JARVIS_VAD_SILENCE_SECONDS", 0.6)
@@ -355,7 +359,7 @@ def _transcribe_with_openai(path: Path) -> str:
         return ""
 
 
-def listen_and_transcribe() -> str:
+def listen_and_transcribe(input_device: int | None = None) -> str:
     """
     Record with real-time VAD and return transcribed text.
     JARVIS_STT_PROVIDER can be `speech_recognition`, `openai`, or `none`.
@@ -374,7 +378,7 @@ def listen_and_transcribe() -> str:
             tmp_name = tmp.name
         path = Path(tmp_name)
 
-        has_audio = _record_vad_wav(path)
+        has_audio = _record_vad_wav(path, input_device)
         if not has_audio:
             return ""
 

@@ -46,7 +46,7 @@ def _extract_text_from_json(payload: object) -> str:
 
 def _openclaw_command(command: str) -> list[str]:
     cli = env_str("OPENCLAW_CLI", "openclaw")
-    timeout = env_int("OPENCLAW_TIMEOUT", 120)
+    timeout = max(1, env_int("OPENCLAW_TIMEOUT", 120))
     args = [
         cli,
         "agent",
@@ -98,7 +98,7 @@ def ask_openclaw(command: str) -> str:
             text=True,
             timeout=timeout + 5,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         log.warning("OpenClaw request failed: %s", exc)
         return OPENCLAW_UNAVAILABLE_MESSAGE
 
