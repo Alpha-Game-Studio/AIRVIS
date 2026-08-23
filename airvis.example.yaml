@@ -1,0 +1,106 @@
+# AIRVIS V6 configuration.
+# Copy to `airvis.yaml` (project root) or `~/.airvis/airvis.yaml`, or point
+# AIRVIS_CONFIG at any path. JSON is accepted too. Environment variables
+# override file values; see `airvis config` for the resolved result.
+
+# Workspace every tool is sandboxed to. Defaults to the current directory.
+# workspace: /path/to/project
+
+routing:
+  # cheap | balanced | fast | quality | local_only | premium
+  strategy: balanced
+  # Optional per-term overrides of the strategy's scoring weights.
+  weights: {}
+  # Skip agents whose backend/provider is unhealthy or rate limited.
+  skip_unhealthy: true
+
+agents:
+  default_timeout: 300
+  default_max_concurrency: 4
+  default_backend: native
+
+providers:
+  # Primary provider id: openai | anthropic | gemini | xai | openrouter | ollama | custom | mock
+  default: ""
+  # Ordered failover chain used when the primary fails.
+  fallbacks: ["mock"]
+  health_check_interval: 30
+  request_timeout: 60
+  max_output_tokens: 2048
+
+backends:
+  # Execution environments to register. `native` is always available.
+  enabled: ["native"]
+  openclaw_command: openclaw
+  hermes_command: hermes
+  execute_timeout: 180
+  max_iterations: 6
+  max_tool_calls: 20
+
+security:
+  # Risk at or below which a tool runs without asking: SAFE | LOW | MEDIUM | HIGH | CRITICAL
+  auto_approve_max_risk: LOW
+  # What happens above that ceiling: approval | allow | deny
+  default_high_risk_policy: approval
+  # Per-tool overrides win over the defaults above.
+  tool_policies:
+    git.push: deny
+  risk_overrides: {}
+  denied_tools: []
+  workspace_restricted: true
+  allow_network: true
+  additional_writable_paths: []
+
+repair:
+  max_retries: 3
+  max_repairs_per_task: 4
+  max_repairs_per_workflow: 12
+  retry_backoff_seconds: 0.5
+  allow_human_review: true
+  # Override the escalation playbook per failure category. ABORT is appended
+  # automatically so no path can loop forever.
+  strategies: {}
+    # PROVIDER_ERROR: [RETRY, CHANGE_PROVIDER, CHANGE_MODEL]
+    # TEST_FAILURE: [MODIFY_CONTEXT, REPLAN]
+
+workflow:
+  max_concurrency: 8
+  task_timeout: 300
+  persist: true
+  cancel_dependents_on_failure: true
+  fail_fast: false
+
+review:
+  enabled: true
+  # A workflow/task below this weighted score is rejected.
+  min_score: 0.6
+  dimensions:
+    - correctness
+    - completeness
+    - security
+    - tests
+    - requirements
+    - regressions
+    - code_quality
+  use_llm_reviewer: false
+
+context:
+  max_chars: 12000
+  max_messages: 24
+  max_previous_results: 6
+  include_artifacts: true
+  # truncate | none
+  compression: truncate
+
+mcp:
+  enabled: false
+  connect_timeout: 20
+  servers: []
+    # - name: filesystem
+    #   command: npx
+    #   args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    #   default_risk: MEDIUM
+
+state:
+  enabled: true
+  # path: ~/.airvis/state.db

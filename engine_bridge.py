@@ -15,8 +15,11 @@ from openclaw_bridge import ask_openclaw
 
 log = logging.getLogger("engine_bridge")
 
-# Current active engine (openclaw | hermes | grokbot)
+# Current active engine (native | openclaw | hermes | grokbot)
 _current_engine = env_str("AI_ENGINE", "openclaw").lower()
+
+# Lazily created AIRVIS native runtime, shared across calls.
+_native_runtime = None
 
 
 def get_current_engine() -> str:
@@ -348,22 +351,19 @@ def ask_ai_engine(command: str, engine: str | None = None) -> str:
     active = (engine or get_current_engine()).lower().strip()
 
     if active in {"native", "airvis", "native-agent"}:
-        from airvis.runtime import AgentRuntime
-
         global _native_runtime
         if _native_runtime is None:
+            from airvis.runtime import AgentRuntime
+
             _native_runtime = AgentRuntime()
+        log.info("Querying AIRVIS native orchestration engine: %s", command)
         return _native_runtime.run(command)
 
     if active in {"hermes", "에르메스", "hermes-agent"}:
         log.info("Querying Hermes Agent: %s", command)
         return ask_hermes(command)
-    elif active in {"grok", "grokbot", "그록", "그록봇", "grok-bot"}:
+    if active in {"grok", "grokbot", "그록", "그록봇", "grok-bot"}:
         log.info("Querying Grok Bot: %s", command)
         return ask_grokbot(command)
-    else:
-        log.info("Querying OpenClaw Engine: %s", command)
-        return ask_openclaw(command)
-
-
-    _native_runtime = None
+    log.info("Querying OpenClaw Engine: %s", command)
+    return ask_openclaw(command)

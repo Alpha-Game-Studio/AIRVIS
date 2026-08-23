@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import builtins
 import json
-from pathlib import Path
 import time
 import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass
@@ -30,7 +31,7 @@ class SessionManager:
         self._save()
         return session
 
-    def list(self) -> list[dict[str, object]]:
+    def list(self) -> builtins.list[dict[str, object]]:
         return [{"id": s.id, "name": s.name, "messages": len(s.messages), "updated": s.updated} for s in self.sessions.values()]
 
     def _save(self) -> None:

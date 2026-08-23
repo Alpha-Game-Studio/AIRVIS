@@ -6,7 +6,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-
 _SECRET = re.compile(r"(?i)(api[_ -]?key|token|password|secret)\s*[=:]\s*[^\s,;]+")
 _SECRET_FIELD = re.compile(r"(?i)(api[_ -]?key|token|password|secret)")
 
