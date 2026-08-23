@@ -8,37 +8,156 @@
 
 ## 📌 주요 특징
 
-### AIRVIS Native Runtime
+### AIRVIS V6 오케스트레이션 엔진
 
-기존 OpenClaw/Hermes/Grok 호환 경로를 유지하면서 `native` 엔진을 선택하면 AIRVIS 자체 Runtime이 세션, Mock/OpenAI-compatible Provider, workspace 제한 Tool, 메모리와 권한 상태를 관리합니다. 외부 API 키 없이도 기본 동작을 검증할 수 있습니다.
+AIRVIS는 더 이상 레지스트리 묶음이 아니라 **실제로 연결된 오케스트레이션 파이프라인**입니다.
+하나의 요청은 아래 경로를 그대로 통과합니다.
+
+```text
+사용자 요청
+   → Orchestrator
+   → Planner (Task Decomposer)
+   → DAG Engine (독립 작업 동시 실행)
+   → AgentRouter (capability / cost / health / policy 스코어링)
+   → Agent  →  Backend  →  Provider  →  Model
+   → Tool 실행 (권한·위험도 게이트)
+   → Artifact / Context 갱신
+   → Review (품질 게이트)
+        ├─ PASS → 최종 결과
+        └─ FAIL → Error Analyzer → Repair Planner
+                  → RETRY / REPLAN / CHANGE_AGENT / CHANGE_PROVIDER /
+                    CHANGE_MODEL / CHANGE_BACKEND / MODIFY_CONTEXT /
+                    REQUEST_APPROVAL / HUMAN_REVIEW / ABORT
+                  → 재실행
+```
+
+#### 계층 분리 원칙
+
+| 계층 | 책임 | 질문 |
+| --- | --- | --- |
+| **AIRVIS** | 계획·라우팅·검수·복구 | "무엇을 해야 하는가?" |
+| **Backend** | 실행 환경·툴 접근·세션·취소 | "이 에이전트를 어떻게 실행하는가?" |
+| **Provider** | 모델 호출 | "어떤 모델이 결과를 생성하는가?" |
+
+에이전트는 `backend_id` / `provider_id` / `model`을 **명시적으로** 선언하며, 등록 시점에
+참조 무결성이 검증됩니다. ID 문자열을 쪼개서 백엔드를 추측하는 규칙은 없습니다.
+
+```python
+from airvis import AirvisEngine
+
+engine = AirvisEngine()
+result = engine.run_sync("이 저장소를 분석해서 버그를 찾고 보고서를 작성해줘")
+print(result.status.value, result.output)
+```
+
+#### 구성 요소
+
+* **Providers** — OpenAI / Anthropic / Gemini / xAI / OpenRouter / Ollama / custom / mock.
+  `ProviderCapabilities`(chat, streaming, tool_calling, vision, structured_output, reasoning,
+  embeddings)로 기능을 감지하므로 모든 Provider가 모든 기능을 구현할 필요는 없습니다.
+  실패 시 fallback 체인을 따라 자동 전환하고 health/latency/실패율을 기록합니다.
+* **Backends** — `native`(인프로세스 에이전트 런타임), `openclaw`, `hermes`(외부 CLI 런타임),
+  `mcp`, custom. OpenClaw/Hermes는 Provider가 아니라 **실행 백엔드**이며, 바이너리가 없으면
+  성공을 위장하지 않고 `BackendUnavailableError`를 던집니다.
+* **Agents** — researcher / debugger / architect / coder / tester / reviewer / committer /
+  reporter / generalist. 파이프라인에 하드코딩되어 있지 않고 레지스트리에서 동적으로 선택됩니다.
+* **Tools** — 단일 정본 추상화. `filesystem.*`, `terminal.execute`, `git.*`, `web.fetch`,
+  `code.analyze`, `test.run` 등 18종. 모든 호출은 권한 → 위험도 → 승인 정책을 거칩니다.
+* **Review** — correctness / completeness / security / tests / requirements / regressions /
+  code_quality를 실제 증거(도구 결과·테스트 출력·아티팩트)로 채점하고 **반려할 수 있습니다.**
+* **Repair** — 실패를 10개 범주로 분류한 뒤 정책 기반으로 전략을 선택하며, 같은 전략을
+  두 번 시도하지 않고 모든 경로가 종료됩니다(무한 재시도 없음).
+* **Artifacts / Context** — 산출물은 1급 객체이며, 작업은 거대한 원문 대신 아티팩트 참조를
+  주고받습니다. 컨텍스트는 예산에 맞춰 압축됩니다.
+* **Observability** — `workflow.*`, `task.*`, `agent.selected`, `backend.selected`,
+  `provider.selected`, `tool.*`, `review.*`, `repair.*` 구조화 이벤트를 발행하고 SQLite에
+  영속화하여 중단된 워크플로를 재개할 수 있습니다.
+
+#### CLI
+
+```bash
+airvis status                 # 엔진 구성 요약
+airvis health                 # Provider/Backend 실시간 헬스 체크
+airvis doctor                 # 의존성·설정·참조 무결성 진단
+airvis providers list         # Provider와 capability, health
+airvis backends list          # 실행 백엔드
+airvis agents list            # 에이전트 선언(backend/provider/model 포함)
+airvis agents route "<작업>"   # 라우팅 점수 근거 확인
+airvis tools list             # 툴과 위험도
+airvis plan "<요청>"           # 실행하지 않고 계획만 확인
+airvis workflow run "<요청>"   # 파이프라인 실행
+airvis workflow status <id>   # 진행 상황
+airvis workflow cancel <id>   # 취소
+airvis workflow resume <id>   # 중단된 워크플로 재개
+airvis task inspect <id>      # 작업 상세
+airvis config                 # 최종 반영된 설정
+```
+
+#### 설정
+
+`airvis.example.yaml`을 `airvis.yaml`(프로젝트 루트) 또는 `~/.airvis/airvis.yaml`로 복사하거나
+`AIRVIS_CONFIG`로 경로를 지정합니다. JSON도 지원하며 환경 변수가 파일 값을 덮어씁니다.
+
+```yaml
+routing:
+  strategy: balanced        # cheap | balanced | fast | quality | local_only | premium
+agents:
+  default_timeout: 300
+providers:
+  health_check_interval: 30
+security:
+  default_high_risk_policy: approval
+repair:
+  max_retries: 3
+workflow:
+  max_concurrency: 8
+```
+
+#### 보안
+
+위험도는 `SAFE → LOW → MEDIUM → HIGH → CRITICAL`이며 기본값은
+`filesystem.read=SAFE`, `filesystem.write=MEDIUM`, `filesystem.delete=HIGH`,
+`terminal.execute=HIGH`(파괴적 명령은 CRITICAL로 승격되어 차단), `git.commit=HIGH`,
+`git.push=CRITICAL` 입니다. 모든 값은 설정으로 조정할 수 있고, 승인 게이트를 우회하는
+경로는 없습니다. 툴은 workspace 밖 경로에 접근할 수 없습니다.
+
+#### MCP
+
+`mcp.enabled: true`로 설정하면 MCP 서버의 툴을 stdio JSON-RPC로 발견하여
+`mcp.<server>.<tool>` 이름으로 등록합니다. MCP 툴도 동일한 권한·위험도 체계를 따릅니다.
+
+#### 하위 호환
+
+기존 공개 API는 어댑터로 유지됩니다. `airvis.runtime.AgentRuntime`은 그대로 동작하지만
+내부적으로 V6 파이프라인을 통해 실행되며, `airvis.provider_manager`, `airvis.model_router`,
+`airvis.planning`, `airvis.multiagent`, `airvis.permissions`는 deprecated 어댑터입니다.
+신규 코드는 `airvis.AirvisEngine`을 사용하세요.
 
 ```bash
 AI_ENGINE=native python3 jarvis.py
-python3 -m airvis.cli status
-python3 -m airvis.cli tools
 python3 -m airvis.cli chat "hello"
-python3 -m airvis.cli agents
-python3 -m airvis.cli plugins
-python3 -m airvis.cli doctor
 ```
 
-Web API에는 `/health`, `/api/providers`, `/api/tools`, `/api/memory`, `/api/chat`, `/api/agent/run`, `/api/tools/execute`가 추가되었습니다. `AIRVIS_PROVIDER=ollama`와 `OLLAMA_MODEL`을 설정하면 OpenAI-compatible Ollama endpoint를 사용할 수 있습니다.
-
-Native Runtime은 `/api/agents`, `/api/agents/delegate`, `/api/plugins`, `/api/tasks`, `/api/scheduler`를 통해 Agent 위임, Plugin 검색, Task와 1회 예약 작업을 제공합니다.
-
-WebSocket은 별도 프로세스로 실행합니다.
+Web API에는 `/health`, `/api/providers`, `/api/backends`, `/api/tools`, `/api/memory`,
+`/api/chat`, `/api/agent/run`, `/api/tools/execute`, `/api/workflows`, `/api/plan`,
+`/api/events`, `/api/config`가 있습니다. WebSocket은 별도 프로세스로 실행합니다.
 
 ```bash
 python3 websocket_server.py
 ```
 
-기본 주소는 `ws://127.0.0.1:8766`이며 `assistant.state`, `assistant.message`, `error` 이벤트를 전송합니다. Provider Manager는 등록 순서대로 실패한 Provider를 건너뛰고 다음 Provider를 시도합니다.
+기본 주소는 `ws://127.0.0.1:8766`이며 `assistant.state`, `assistant.message`, `error`
+이벤트를 전송합니다. 원격 바인딩 시에는 `AIRVIS_API_TOKEN`을 설정하고 요청에
+`Authorization: Bearer <token>`을 포함해야 합니다.
 
-원격 바인딩 시에는 `AIRVIS_API_TOKEN`을 설정하고 요청에 `Authorization: Bearer <token>`을 포함해야 합니다. 토큰 없이 원격 바인딩하면 모든 요청이 거부됩니다.
+#### 테스트
 
-Model Catalog는 `/api/models`에서 확인할 수 있고, 환경 점검은 `python3 -m airvis.cli doctor` 또는 `/api/doctor`로 실행합니다.
+```bash
+pip install -e ".[test]"
+pytest
+```
 
-Provider 장애 대비 fallback은 `AIRVIS_FALLBACK_PROVIDER=ollama`처럼 설정합니다. Native Runtime은 주 Provider 실패 시 fallback Provider를 순서대로 시도합니다.
+### 음성 비서 기능
 
 * **👏 더블 박수(Double-Clap) 웨이크업**: 마이크로 두 번의 박수를 감지하면 즉시 자비스가 깨어납니다.
 * **⚡ 초고속 실시간 음성 대화 (VAD)**: 말이 끝나면 0.5초 만에 자동으로 감지하여 지연 없이 빠르게 응답합니다.
@@ -95,14 +214,33 @@ Provider 장애 대비 fallback은 `AIRVIS_FALLBACK_PROVIDER=ollama`처럼 설�
 ## 📁 파일 구조
 
 ```text
-├── jarvis.py              # 더블 박수 감지, Wake-up, 명령 라우팅 및 음성 비서 메인 루프
-├── engine_bridge.py       # OpenClaw, Hermes, Grokbot 멀티 AI 엔진 통합 디스패처
-├── openclaw_bridge.py     # OpenClaw CLI/Gateway 통신 및 응답 JSON 파싱 브릿지
-├── speech.py              # 실시간 VAD 음성 인식(STT) 및 ElevenLabs TTS (캐싱 & 폴백)
-├── config.py              # .env 및 환경변수 로더 유틸리티
-├── requirements.txt       # 의존성 패키지 목록
-├── .env                   # API 키 및 환경 설정 (Git 제외)
-└── README.md              # 프로젝트 설명서
+airvis/                      # V6 오케스트레이션 엔진 (설치 가능한 패키지)
+├── engine.py                # 컴포지션 루트: 모든 레지스트리와 파이프라인을 조립
+├── core/                    # 예외 · 이벤트 · 설정 · 헬스/워크로드 · async 브릿지
+├── providers/               # Provider 인터페이스, HTTP 구현체, 레지스트리, 팩토리
+├── backends/                # Backend 인터페이스, native / OpenClaw / Hermes / MCP, 라우터
+├── agents/                  # AgentSpec, 레지스트리(참조 검증), AgentRouter, 기본 로스터
+├── tools/                   # 단일 정본 Tool 추상화 + filesystem/terminal/git/web/code/test
+├── security/                # PermissionManager (위험도 · 정책 · 승인 · 샌드박스)
+├── orchestration/           # Task 모델, Planner, DAG 엔진, Review, Repair, Orchestrator
+├── context/                 # 컨텍스트 조립 및 압축
+├── artifacts/               # 1급 아티팩트와 버전 관리
+├── state/                   # SQLite 영속화(워크플로/작업/이벤트/아티팩트) + 장기 기억
+├── mcp/                     # MCP stdio 클라이언트와 툴 등록
+├── cli.py                   # airvis 명령줄 인터페이스
+├── doctor.py                # 설치·설정·참조 무결성 진단
+├── compat.py                # V4 공개 API 어댑터
+└── runtime.py               # AgentRuntime 파사드 (하위 호환)
+
+jarvis.py                    # 더블 박수 감지, Wake-up, 명령 라우팅 및 음성 비서 메인 루프
+engine_bridge.py             # OpenClaw, Hermes, Grokbot 멀티 AI 엔진 통합 디스패처
+openclaw_bridge.py           # OpenClaw CLI/Gateway 통신 및 응답 JSON 파싱 브릿지
+speech.py                    # 실시간 VAD 음성 인식(STT) 및 ElevenLabs TTS (캐싱 & 폴백)
+web_server.py                # 로컬 컨트롤 룸 HTTP API
+websocket_server.py          # 실시간 상태 브로드캐스트
+config.py                    # .env 및 환경변수 로더 유틸리티
+airvis.example.yaml          # 설정 예시
+tests/                       # 단위 · 통합 · 실패 경로 · 종단 인수 테스트
 ```
 
 ---

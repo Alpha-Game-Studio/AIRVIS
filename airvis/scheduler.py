@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+import builtins
+import json
 import threading
 import uuid
-import json
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 
 @dataclass
@@ -44,7 +45,7 @@ class Scheduler:
         self._save()
         return True
 
-    def list(self) -> list[dict[str, object]]:
+    def list(self) -> builtins.list[dict[str, object]]:
         return [{"id": job.id, "prompt": job.prompt, "run_at": job.run_at.isoformat(), "cancelled": job.cancelled} for job in self.jobs.values()]
 
     def _save(self) -> None:

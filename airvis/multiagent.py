@@ -1,7 +1,18 @@
+"""Deprecated module kept for backward compatibility.
+
+Agents are now declared in :mod:`airvis.agents` and selected by
+:class:`airvis.agents.router.AgentRouter`.
+"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import uuid
+from dataclasses import dataclass, field
+
+from .agents.defaults import DEFAULT_ROSTER
+from .compat import LegacyAgentDelegator, deprecated
+
+__all__ = ["AgentDelegator", "LegacyAgentDelegator", "SubAgent"]
 
 
 @dataclass
@@ -12,15 +23,19 @@ class SubAgent:
 
 
 class AgentDelegator:
+    """V4 delegator; mirrors the default roster without an engine attached."""
+
     def __init__(self) -> None:
+        deprecated("airvis.multiagent.AgentDelegator", "airvis.agents.AgentRegistry")
         self.agents = {
-            "research": SubAgent("research", {"web", "filesystem.search"}),
-            "coding": SubAgent("coding", {"filesystem.read", "filesystem.search", "terminal.execute"}),
-            "test": SubAgent("test", {"terminal.execute", "filesystem.read"}),
+            entry["role"]: SubAgent(entry["role"], set(entry["tools"])) for entry in DEFAULT_ROSTER
         }
 
     def list(self) -> list[dict[str, object]]:
-        return [{"id": agent.id, "role": agent.role, "tools": sorted(agent.tools)} for agent in self.agents.values()]
+        return [
+            {"id": agent.id, "role": agent.role, "tools": sorted(agent.tools)}
+            for agent in self.agents.values()
+        ]
 
     def delegate(self, role: str, prompt: str, runtime) -> str:
         if role not in self.agents:

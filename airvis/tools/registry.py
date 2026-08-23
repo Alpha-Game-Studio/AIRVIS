@@ -1,0 +1,237 @@
+"""The one canonical tool registry.
+
+Registration alone does nothing: tools become reachable only through
+:meth:`ToolRegistry.call`, which enforces permissions, risk policy and
+approval before the handler ever runs.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import builtins
+import time
+from collections.abc import Iterable, Iterator
+from pathlib import Path
+from typing import Any
+
+from ..core.asyncutil import run_blocking
+from ..core.errors import (
+    DuplicateRegistrationError,
+    PermissionDeniedError,
+    ToolExecutionError,
+    ToolTimeoutError,
+    UnknownToolError,
+)
+from ..core.events import EventBus, EventType
+from ..security.permissions import ApprovalHandler, PermissionManager
+from .base import RiskLevel, Tool, ToolContext, ToolResult
+
+
+class ToolRegistry:
+    """Holds tools and executes them through the security pipeline."""
+
+    def __init__(
+        self,
+        workspace: Path | str | None = None,
+        *,
+        permissions: PermissionManager | None = None,
+        event_bus: EventBus | None = None,
+        install_builtins: bool = True,
+    ) -> None:
+        self.workspace = Path(workspace or Path.cwd()).resolve()
+        self.event_bus = event_bus
+        self.permissions = permissions or PermissionManager(workspace=self.workspace, event_bus=event_bus)
+        self._tools: dict[str, Tool] = {}
+        if install_builtins:
+            from .builtin import builtin_tools
+
+            for tool in builtin_tools():
+                self.register(tool)
+
+    # -- registration ----------------------------------------------------------
+
+    def register(self, tool: Tool, *, replace: bool = True) -> Tool:
+        if not isinstance(tool, Tool):
+            raise TypeError(f"expected a Tool instance, got {type(tool).__name__}")
+        if tool.name in self._tools and not replace:
+            raise DuplicateRegistrationError(f"tool already registered: {tool.name}", tool=tool.name)
+        self._tools[tool.name] = tool
+        return tool
+
+    def register_all(self, tools: Iterable[Tool], *, replace: bool = True) -> None:
+        for tool in tools:
+            self.register(tool, replace=replace)
+
+    def unregister(self, name: str) -> bool:
+        return self._tools.pop(name, None) is not None
+
+    def get(self, name: str) -> Tool:
+        try:
+            return self._tools[name]
+        except KeyError as exc:
+            raise UnknownToolError(f"unknown tool: {name}", tool=name) from exc
+
+    def has(self, name: str) -> bool:
+        return name in self._tools
+
+    def names(self) -> builtins.list[str]:
+        return sorted(self._tools)
+
+    def list(self) -> builtins.list[dict[str, Any]]:
+        """Tool schemas, sorted by name (stable for CLI/API output)."""
+        return [self._describe(tool) for tool in sorted(self._tools.values(), key=lambda item: item.name)]
+
+    def matching(self, allowed: Iterable[str] | None = None) -> builtins.list[Tool]:
+        if allowed is None:
+            return list(self._tools.values())
+        allowed_set = set(allowed)
+        return [tool for name, tool in self._tools.items() if name in allowed_set]
+
+    def __iter__(self) -> Iterator[Tool]:
+        return iter(self._tools.values())
+
+    def __len__(self) -> int:
+        return len(self._tools)
+
+    def __contains__(self, name: object) -> bool:
+        return name in self._tools
+
+    def _describe(self, tool: Tool) -> dict[str, Any]:
+        schema = tool.schema()
+        schema["effective_risk"] = self.permissions.effective_risk(tool).name
+        return schema
+
+    # -- execution -------------------------------------------------------------
+
+    def context(
+        self,
+        *,
+        workflow_id: str | None = None,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+        timeout: float = 60.0,
+    ) -> ToolContext:
+        return ToolContext(
+            workspace=self.workspace,
+            permissions=self.permissions,
+            workflow_id=workflow_id,
+            task_id=task_id,
+            agent_id=agent_id,
+            timeout=timeout,
+            allow_network=self.permissions.config.allow_network,
+        )
+
+    async def call(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        *,
+        context: ToolContext | None = None,
+        confirm: bool = False,
+        agent_permissions: set[str] | frozenset[str] | None = None,
+        agent_tools: set[str] | frozenset[str] | None = None,
+        approval_handler: ApprovalHandler | None = None,
+        timeout: float | None = None,
+    ) -> ToolResult:
+        """Authorise and execute ``name``; never raises for tool-level failures."""
+        arguments = dict(arguments or {})
+        tool = self.get(name)
+        ctx = context or self.context()
+        effective_timeout = timeout if timeout is not None else ctx.timeout
+
+        self._emit(EventType.TOOL_STARTED, tool.name, ctx, status="started")
+        started = time.perf_counter()
+
+        try:
+            tool.validate_arguments(arguments)
+            await self.permissions.authorize(
+                tool,
+                arguments,
+                agent_permissions=agent_permissions,
+                agent_tools=agent_tools,
+                confirm=confirm,
+                approval_handler=approval_handler,
+                workflow_id=ctx.workflow_id,
+                task_id=ctx.task_id,
+                agent_id=ctx.agent_id,
+            )
+        except PermissionDeniedError:
+            self._emit(EventType.TOOL_FAILED, tool.name, ctx, status="denied",
+                       duration_ms=(time.perf_counter() - started) * 1000)
+            raise
+
+        try:
+            output = await asyncio.wait_for(tool.run(ctx, **arguments), timeout=effective_timeout)
+        except asyncio.TimeoutError as exc:
+            duration = (time.perf_counter() - started) * 1000
+            self._emit(EventType.TOOL_FAILED, tool.name, ctx, status="timeout", duration_ms=duration)
+            raise ToolTimeoutError(
+                f"{tool.name} timed out after {effective_timeout}s", tool=tool.name, timeout=effective_timeout
+            ) from exc
+        except (PermissionDeniedError, ToolExecutionError):
+            self._emit(EventType.TOOL_FAILED, tool.name, ctx, status="failed",
+                       duration_ms=(time.perf_counter() - started) * 1000)
+            raise
+        except Exception as exc:
+            duration = (time.perf_counter() - started) * 1000
+            self._emit(EventType.TOOL_FAILED, tool.name, ctx, status="failed", duration_ms=duration)
+            raise ToolExecutionError(f"{tool.name} failed: {exc}", tool=tool.name, cause=type(exc).__name__) from exc
+
+        duration = (time.perf_counter() - started) * 1000
+        result = _as_result(tool.name, output, duration)
+        self._emit(EventType.TOOL_COMPLETED, tool.name, ctx, status="ok", duration_ms=duration)
+        return result
+
+    def execute(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        confirm: bool = False,
+        *,
+        context: ToolContext | None = None,
+        timeout: float | None = None,
+    ) -> Any:
+        """Synchronous wrapper kept for the V4 API; returns the raw output."""
+        result = run_blocking(
+            self.call(name, arguments, context=context, confirm=confirm, timeout=timeout)
+        )
+        return result.unwrap()
+
+    def _emit(
+        self,
+        event_type: EventType,
+        tool: str,
+        ctx: ToolContext,
+        *,
+        status: str,
+        duration_ms: float | None = None,
+    ) -> None:
+        if self.event_bus is None:
+            return
+        self.event_bus.publish(
+            event_type,
+            tool=tool,
+            workflow_id=ctx.workflow_id,
+            task_id=ctx.task_id,
+            agent_id=ctx.agent_id,
+            status=status,
+            duration_ms=duration_ms,
+        )
+
+
+def _as_result(name: str, output: Any, duration_ms: float) -> ToolResult:
+    if isinstance(output, ToolResult):
+        output.duration_ms = output.duration_ms or duration_ms
+        output.tool = output.tool or name
+        return output
+    return ToolResult(tool=name, ok=True, output=output, duration_ms=duration_ms)
+
+
+def command_risk(command: str) -> str:
+    """Legacy helper retained for the V4 API; see :mod:`airvis.tools.terminal`."""
+    from .terminal import classify_command
+
+    return classify_command(command).name
+
+
+__all__ = ["RiskLevel", "ToolRegistry", "command_risk"]

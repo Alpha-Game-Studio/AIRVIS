@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import builtins
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
-import json
 
 
 @dataclass
@@ -31,7 +32,7 @@ class PluginManager:
             except (OSError, ValueError, KeyError):
                 continue
 
-    def list(self) -> list[dict[str, object]]:
+    def list(self) -> builtins.list[dict[str, object]]:
         return [{"name": plugin.name, "version": plugin.version, "permissions": sorted(plugin.permissions), "enabled": plugin.enabled} for plugin in self.plugins.values()]
 
     def enable(self, name: str, enabled: bool = True) -> bool:
@@ -46,7 +47,9 @@ class PluginManager:
         target = self.directory / name
         target.mkdir(parents=True, exist_ok=False)
         (target / "manifest.json").write_text(json.dumps({"name": name, "version": "0.1.0", "permissions": [], "tools": []}, indent=2), encoding="utf-8")
-        (target / "plugin.py").write_text("from airvis.sdk import Plugin\n\nPLUGIN = Plugin(%r)\n" % name, encoding="utf-8")
+        (target / "plugin.py").write_text(
+            f"from airvis.sdk import Plugin\n\nPLUGIN = Plugin({name!r})\n", encoding="utf-8"
+        )
         self.plugins[name] = Plugin(name)
         return target
 

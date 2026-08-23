@@ -18,6 +18,8 @@ from urllib.parse import urlparse
 
 import config
 import jarvis
+from airvis.core.asyncutil import run_blocking
+from airvis.core.errors import ApprovalRequiredError, PermissionDeniedError
 from airvis.runtime import AgentRuntime
 
 
@@ -30,6 +32,7 @@ COMMAND_LOCK = threading.Lock()
 TTS_LOCK = threading.Lock()
 TTS_ACTIVE = threading.Event()
 NATIVE_RUNTIME = AgentRuntime()
+ENGINE = NATIVE_RUNTIME.engine
 
 SETTING_DEFINITIONS = {
     "JARVIS_AGENT_ENABLED": ("bool", True),
@@ -181,8 +184,23 @@ class AirvisHandler(BaseHTTPRequestHandler):
             self._send_json({"models": NATIVE_RUNTIME.catalog.list()})
             return
         if path == "/api/doctor":
-            from airvis.doctor import run_checks
-            self._send_json({"checks": run_checks()})
+            from airvis.doctor import run_checks, summarize
+            self._send_json(summarize(run_checks(ENGINE)))
+            return
+        if path == "/api/backends":
+            self._send_json({"backends": ENGINE.backends.list()})
+            return
+        if path == "/api/health":
+            self._send_json(run_blocking(ENGINE.health_check()))
+            return
+        if path == "/api/workflows":
+            self._send_json({"workflows": ENGINE.store.list_workflows()})
+            return
+        if path == "/api/events":
+            self._send_json({"events": ENGINE.event_bus.history(limit=200)})
+            return
+        if path == "/api/config":
+            self._send_json({"config": ENGINE.config.to_dict()})
             return
         if path == "/api/costs":
             self._send_json({"total": NATIVE_RUNTIME.costs.total})
@@ -310,10 +328,35 @@ class AirvisHandler(BaseHTTPRequestHandler):
             if self.path == "/api/settings":
                 self._send_json({"settings": update_settings(payload)}, HTTPStatus.OK)
                 return
+            if self.path == "/api/workflows":
+                request = str(payload.get("request", payload.get("message", ""))).strip()
+                if not request:
+                    raise ValueError("request is required")
+                result = run_blocking(ENGINE.run(request, strategy=payload.get("strategy")))
+                self._send_json(result.to_dict())
+                return
+            if self.path == "/api/workflows/cancel":
+                workflow = str(payload.get("workflow", "")).strip()
+                if not workflow:
+                    raise ValueError("workflow is required")
+                self._send_json({"cancelled": ENGINE.cancel(workflow)})
+                return
+            if self.path == "/api/workflows/resume":
+                workflow = str(payload.get("workflow", "")).strip()
+                if not workflow:
+                    raise ValueError("workflow is required")
+                self._send_json(run_blocking(ENGINE.resume(workflow)).to_dict())
+                return
+            if self.path == "/api/plan":
+                request = str(payload.get("request", "")).strip()
+                if not request:
+                    raise ValueError("request is required")
+                self._send_json(run_blocking(ENGINE.planner.plan(request)).to_dict())
+                return
             self.send_error(HTTPStatus.NOT_FOUND)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-        except PermissionError as exc:
+        except (ApprovalRequiredError, PermissionDeniedError, PermissionError) as exc:
             self._send_json({"error": str(exc), "confirmation_required": True}, HTTPStatus.CONFLICT)
         except Exception as exc:
             self._send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
