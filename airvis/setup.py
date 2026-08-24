@@ -1,4 +1,11 @@
-"""Interactive first-run setup for AIRVIS."""
+"""Interactive first-run setup for AIRVIS.
+
+AIRVIS is a native agent operating system.  External runtimes such as OpenClaw
+or Hermes are not required to run the engine and are deliberately not selected
+by this wizard.  The setup command configures the same high-level control
+plane users expect from an agent OS: providers, channels, orchestration,
+plugins and skills.
+"""
 
 from __future__ import annotations
 
@@ -8,10 +15,12 @@ from typing import Any
 
 SETUP_PATH = Path.home() / ".airvis" / "setup.json"
 WORKSPACE_CONFIG = Path.cwd() / "airvis.json"
-PROVIDERS = ("openai", "anthropic", "gemini", "xai", "openrouter", "ollama", "mock")
+PLUGIN_DIR = Path.home() / ".airvis" / "plugins"
+SKILL_DIR = Path.home() / ".airvis" / "skills"
+
+PROVIDERS = ("ollama", "openai", "anthropic", "gemini", "xai", "openrouter", "mock")
 CHANNELS = ("cli", "telegram", "discord", "slack", "web", "imessage")
 STRATEGIES = ("balanced", "cheap", "fast", "quality", "premium", "local_only")
-BACKENDS = ("native", "openclaw", "hermes")
 
 
 def _ask(prompt: str, default: str = "") -> str:
@@ -58,6 +67,11 @@ def _multi(title: str, options: tuple[str, ...], defaults: list[str]) -> list[st
     return selected
 
 
+def _list_input(title: str, defaults: list[str]) -> list[str]:
+    value = _ask(title, ",".join(defaults))
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 def _load(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
@@ -68,49 +82,106 @@ def _load(path: Path) -> dict[str, Any]:
         return {}
 
 
+def _bool(prompt: str, default: bool) -> bool:
+    raw = _ask(prompt, "y" if default else "n").lower()
+    return raw in {"y", "yes", "1", "true", "on"}
+
+
 def run() -> int:
-    print("\n╭──────────────────────────────────────╮")
-    print("│          AIRVIS 8.2 SETUP            │")
-    print("╰──────────────────────────────────────╯")
-    print("Configure AIRVIS once. Run `airvis setup` again whenever you want.\n")
+    print("\n╭────────────────────────────────────────────╮")
+    print("│              AIRVIS 8.2 SETUP              │")
+    print("│       Native Agent Operating System        │")
+    print("╰────────────────────────────────────────────╯")
+    print("Configure AIRVIS like an agent OS. Run `airvis setup` again to edit it.\n")
+    print("Runtime: AIRVIS Native Engine (always enabled)")
+    print("OpenClaw/Hermes are NOT required and are not selected by this setup.\n")
 
     existing = _load(SETUP_PATH)
-    current_engine_config = _load(WORKSPACE_CONFIG)
-    provider = _choose("Provider", PROVIDERS, str(existing.get("provider", current_engine_config.get("providers", {}).get("default", "ollama"))))
-    orchestrator = existing.get("orchestrator", {})
-    strategy = _choose("Orchestrator strategy", STRATEGIES, str(orchestrator.get("strategy", current_engine_config.get("routing", {}).get("strategy", "balanced"))))
-    backend = _choose("Agent runtime", BACKENDS, str(orchestrator.get("backend", "native")))
+    current = _load(WORKSPACE_CONFIG)
+
+    # 1. Providers ------------------------------------------------------------
+    previous_providers = list(existing.get("providers", []))
+    if not previous_providers and existing.get("provider"):
+        previous_providers = [str(existing["provider"])]
+    if not previous_providers:
+        previous_providers = [str(current.get("providers", {}).get("default", "ollama"))]
+    providers = _multi("Providers", PROVIDERS, previous_providers) or ["ollama"]
+    default_provider = _choose("Default provider", tuple(providers), providers[0])
+    fallbacks = [item for item in providers if item != default_provider]
+
+    # 2. Channels -------------------------------------------------------------
     channels = _multi("Channels", CHANNELS, list(existing.get("channels", ["cli"]))) or ["cli"]
 
-    print("\nPlugins and skills are local metadata and can be expanded by future plugin packs.")
-    plugins = _ask("Enabled plugins (comma-separated)", ",".join(existing.get("plugins", [])))
-    skills = _ask("Enabled skills (comma-separated)", ",".join(existing.get("skills", [])))
+    # 3. Orchestrator ---------------------------------------------------------
+    old_orchestrator = existing.get("orchestrator", {})
+    strategy = _choose(
+        "Orchestrator strategy",
+        STRATEGIES,
+        str(old_orchestrator.get("strategy", current.get("routing", {}).get("strategy", "balanced"))),
+    )
+    max_concurrency = int(_ask("Maximum concurrent agent tasks", str(old_orchestrator.get("max_concurrency", 4))))
+    review = _bool("Enable automatic review?", bool(old_orchestrator.get("review", True)))
+    auto_repair = _bool("Enable automatic repair/retry?", bool(old_orchestrator.get("auto_repair", True)))
 
-    if provider not in {"ollama", "mock"}:
-        print("\nAPI keys are never written to AIRVIS config.")
-        print("Set the provider's environment variable instead (for example OPENAI_API_KEY).")
+    # 4. Plugins / skills -----------------------------------------------------
+    print("\nPlugins")
+    print("Plugins are native AIRVIS extensions. Enter installed plugin IDs separated by commas.")
+    plugins = _list_input("Enabled plugins", list(existing.get("plugins", [])))
+
+    print("\nSkills")
+    print("Skills are reusable instructions/capability packs loaded by the native agent.")
+    skills = _list_input("Enabled skills", list(existing.get("skills", [])))
+
+    # API keys remain environment-managed; setup never writes secrets.
+    if any(item not in {"ollama", "mock"} for item in providers):
+        print("\nProvider credentials")
+        print("API keys are never written to AIRVIS config. Use the provider's environment variable.")
+        print("Examples: OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, XAI_API_KEY.")
 
     setup_data = {
-        "version": 1,
-        "provider": provider,
+        "version": 2,
+        "runtime": "native",
+        "providers": providers,
+        "default_provider": default_provider,
+        "fallback_providers": fallbacks,
         "channels": channels,
-        "orchestrator": {"strategy": strategy, "backend": backend, "review": True, "auto_repair": True},
-        "plugins": [item.strip() for item in plugins.split(",") if item.strip()],
-        "skills": [item.strip() for item in skills.split(",") if item.strip()],
+        "orchestrator": {
+            "strategy": strategy,
+            "backend": "native",
+            "max_concurrency": max_concurrency,
+            "review": review,
+            "auto_repair": auto_repair,
+        },
+        "plugins": plugins,
+        "skills": skills,
     }
+
     SETUP_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
+    SKILL_DIR.mkdir(parents=True, exist_ok=True)
     SETUP_PATH.write_text(json.dumps(setup_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    # Only write keys understood by AirvisConfig. Existing project settings are preserved.
-    current_engine_config.setdefault("providers", {})["default"] = provider
-    current_engine_config.setdefault("routing", {})["strategy"] = strategy
-    current_engine_config.setdefault("backends", {})["enabled"] = [backend]
-    WORKSPACE_CONFIG.write_text(json.dumps(current_engine_config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # Only write keys understood by AirvisConfig. Keep the actual engine native.
+    current.setdefault("providers", {})["default"] = default_provider
+    current["providers"]["fallbacks"] = fallbacks
+    current.setdefault("routing", {})["strategy"] = strategy
+    current.setdefault("agents", {})["default_backend"] = "native"
+    current["agents"]["default_max_concurrency"] = max_concurrency
+    current.setdefault("backends", {})["enabled"] = ["native"]
+    current.setdefault("review", {})["enabled"] = review
+    current.setdefault("repair", {})["allow_human_review"] = True
+    if not auto_repair:
+        current["repair"]["max_retries"] = 0
+
+    WORKSPACE_CONFIG.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     print(f"\n✓ Setup metadata: {SETUP_PATH}")
     print(f"✓ Engine config: {WORKSPACE_CONFIG}")
-    print(f"✓ Provider: {provider}")
-    print(f"✓ Orchestrator: {strategy} / {backend}")
+    print(f"✓ Runtime: AIRVIS Native Engine")
+    print(f"✓ Providers: {', '.join(providers)} (default: {default_provider})")
     print(f"✓ Channels: {', '.join(channels)}")
-    print("\nSetup complete. Run `airvis status` to inspect the engine.")
+    print(f"✓ Orchestrator: {strategy}, concurrency={max_concurrency}")
+    print(f"✓ Plugins: {', '.join(plugins) if plugins else 'none'}")
+    print(f"✓ Skills: {', '.join(skills) if skills else 'none'}")
+    print("\nSetup complete. Run `airvis status`, `airvis health`, or `airvis chat \"...\"`.")
     return 0
