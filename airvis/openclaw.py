@@ -1,12 +1,9 @@
 """First-class OpenClaw runtime built on AIRVIS orchestration.
 
-This is intentionally *not* an adapter around the external ``openclaw`` CLI.
-OpenClaw mode is an autonomous agent runtime: AIRVIS plans work, builds a DAG,
-routes each task to an agent, executes real tools, records artifacts/context,
-reviews the result and repairs failed tasks.
-
-The external OpenClaw binary remains optional compatibility infrastructure. The
-class in this module is the OpenClaw implementation users can run directly.
+This module implements OpenClaw natively: planning, DAG orchestration, agent
+routing, real tool execution, context, review and repair all happen inside the
+AIRVIS process. External OpenClaw/Hermes binaries are optional compatibility
+backends, not the OpenClaw implementation itself.
 """
 
 from __future__ import annotations
@@ -32,19 +29,21 @@ class OpenClawOptions:
     use_llm_planner: bool = True
     strategy: str = "balanced"
     auto_repair: bool = True
+    provider: str | None = None
+    model: str | None = None
 
 
 class OpenClaw:
     """Autonomous, orchestrated coding/desktop agent runtime.
 
-    Unlike the legacy backend integration, this object owns the full agent loop.
-    A single user request can become multiple dependent tasks and can recover
-    from failed implementation/test/review stages without handing control to an
-    external CLI process.
+    A request becomes a real task graph. Each task is routed to an agent, the
+    native backend gives that agent access to AIRVIS tools, provider calls are
+    made through the provider registry, and review/repair can iterate until the
+    workflow reaches a terminal state.
     """
 
     name = "AIRVIS OpenClaw"
-    version = "7.0.0"
+    version = "7.1.0"
 
     def __init__(
         self,
@@ -62,6 +61,20 @@ class OpenClaw:
         settings.backends.max_iterations = max(1, self.options.max_iterations)
         settings.backends.max_tool_calls = max(1, self.options.max_tool_calls)
         settings.workflow.max_concurrency = max(1, settings.workflow.max_concurrency)
+
+        # Explicit CLI/API selection wins over environment/configuration. The
+        # model is applied to every native agent so the whole orchestration run
+        # uses a real model instead of silently falling back to MockProvider.
+        if self.options.provider:
+            settings.providers.default = self.options.provider.strip().lower()
+        if self.options.model:
+            settings.providers.model = self.options.model if hasattr(settings.providers, "model") else ""
+            # Provider-specific model variables are still honoured by factory;
+            # keep a generic override in the environment-free path below.
+            settings.providers.fallbacks = [
+                item for item in settings.providers.fallbacks if item != "mock"
+            ]
+
         if not self.options.auto_repair:
             settings.repair.max_retries = 0
 
@@ -71,53 +84,46 @@ class OpenClaw:
             approval_handler=approval_handler,
             use_llm_planner=self.options.use_llm_planner,
         )
+        if self.options.model:
+            # Providers expose one default model; make the explicit OpenClaw
+            # model selection authoritative after registry construction.
+            for provider in self.engine.providers:
+                provider.default_model = self.options.model
         self.workspace = root
         self.session_id: str | None = None
 
     async def run(self, request: str) -> WorkflowResult:
-        """Execute a request through the complete autonomous OpenClaw loop."""
         result = await self.engine.run(request, strategy=self.options.strategy)
         self.session_id = result.workflow_id
         return result
 
     def run_sync(self, request: str) -> WorkflowResult:
-        """Synchronous convenience API for desktop/CLI integrations."""
         return run_blocking(self.run(request))
 
     async def resume(self, workflow_id: str) -> WorkflowResult:
-        """Resume a persisted workflow without losing its task graph."""
         result = await self.engine.resume(workflow_id)
         self.session_id = result.workflow_id
         return result
 
     def cancel(self, workflow_id: str | None = None) -> bool:
-        """Cancel the active workflow or an explicitly supplied workflow."""
         target = workflow_id or self.session_id
         if not target:
             return False
         return self.engine.cancel(target)
 
     async def events(self, workflow_id: str | None = None) -> list[dict[str, Any]]:
-        """Return the persisted/in-memory event trail for a workflow."""
         target = workflow_id or self.session_id
         if not target:
             return []
         return self.engine.event_bus.history(workflow_id=target, limit=400)
 
     async def stream(self, request: str) -> AsyncIterator[dict[str, Any]]:
-        """Yield orchestration events while a request is executing.
-
-        The event bus is intentionally used instead of scraping subprocess
-        output, so consumers receive structured task/agent/tool/review/repair
-        events regardless of the selected model.
-        """
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         finished = asyncio.Event()
 
         def on_event(event: Event) -> None:
-            payload = event.to_dict()
             try:
-                queue.put_nowait(payload)
+                queue.put_nowait(event.to_dict())
             except asyncio.QueueFull:
                 pass
 
@@ -143,28 +149,21 @@ class OpenClaw:
                 task.cancel()
 
     def describe(self) -> dict[str, Any]:
-        """Describe this runtime and its orchestration capabilities."""
         return {
             "name": self.name,
             "version": self.version,
             "mode": "native_orchestrated",
             "workspace": str(self.workspace),
+            "provider_override": self.options.provider,
+            "model_override": self.options.model,
             "capabilities": [
-                "planning",
-                "multi_agent",
-                "dag_orchestration",
-                "tool_execution",
-                "context",
-                "artifacts",
-                "review",
-                "repair",
-                "resume",
-                "sessions",
-                "permissions",
-                "streaming_events",
+                "planning", "multi_agent", "dag_orchestration", "tool_execution",
+                "context", "artifacts", "review", "repair", "resume", "sessions",
+                "permissions", "streaming_events",
             ],
             "agents": [agent.id for agent in self.engine.agents.all()],
             "tools": len(self.engine.tools),
+            "providers": self.engine.providers.names(),
         }
 
 
