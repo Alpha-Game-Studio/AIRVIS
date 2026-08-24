@@ -1,10 +1,11 @@
-"""AIRVIS — AI orchestration engine."""
+"""AIRVIS — AI orchestration engine and first-class OpenClaw runtime."""
 
 from .agents import AgentRegistry, AgentRouter, AgentSpec
 from .core.config import AirvisConfig
 from .core.errors import AirvisError
 from .core.events import Event, EventBus, EventType
 from .engine import AirvisEngine, build_engine
+from .openclaw import OpenClaw, OpenClawOptions
 from .orchestration import (
     Orchestrator,
     Plan,
@@ -17,7 +18,7 @@ from .orchestration import (
 )
 from .runtime import AgentRuntime, AgentState
 
-__version__ = "6.0.0"
+__version__ = "7.0.0"
 
 __all__ = [
     "AgentRegistry",
@@ -31,6 +32,8 @@ __all__ = [
     "Event",
     "EventBus",
     "EventType",
+    "OpenClaw",
+    "OpenClawOptions",
     "Orchestrator",
     "Plan",
     "Planner",
