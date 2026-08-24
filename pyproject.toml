@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "airvis"
-version = "6.0.0"
-description = "AIRVIS AI orchestration engine"
+version = "7.0.0"
+description = "AIRVIS OpenClaw AI orchestration engine"
 requires-python = ">=3.10"
 dependencies = [
 	"numpy>=1.24,<3",
@@ -19,6 +19,7 @@ test = ["pytest>=8", "pytest-asyncio>=0.23"]
 
 [project.scripts]
 airvis = "airvis.cli:main"
+airvis-claw = "airvis.openclaw_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["airvis*"]
@@ -38,13 +39,8 @@ target-version = "py310"
 [tool.ruff.lint]
 extend-select = ["I", "UP", "B", "SIM", "RUF"]
 ignore = [
-	# Observability, persistence and health probes must never be able to break
-	# execution, so they deliberately catch broadly and log instead of raising.
 	"BLE001",
-	# Tool/Provider/Backend declare their defaults as class attributes by design;
-	# subclasses override them declaratively.
 	"RUF012",
-	# Korean input uses fullwidth punctuation (？ ：); the parsers must match it.
 	"RUF001",
 ]
 
@@ -52,13 +48,9 @@ ignore = [
 "tests/*" = ["S101"]
 
 [tool.mypy]
-# The interpreter's own version is used; numpy's stubs require >= 3.12 syntax.
 ignore_missing_imports = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-# Tool/Provider/Backend subclasses declare their real parameters instead of
-# **kwargs: the registry validates arguments against `Tool.parameters` before
-# calling, so the narrowed signature is the contract, not a violation of it.
 module = ["airvis.tools.*", "airvis.providers.*", "airvis.backends.*"]
 disable_error_code = ["override"]
