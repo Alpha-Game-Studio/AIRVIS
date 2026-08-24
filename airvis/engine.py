@@ -38,7 +38,13 @@ log = logging.getLogger("airvis.engine")
 
 
 class AirvisEngine:
-    """The assembled AIRVIS orchestration engine."""
+    """The assembled AIRVIS autonomous agent engine.
+
+    The native engine owns the complete agent loop: planning, capability-based
+    routing, context assembly, tool execution, verification, repair and
+    persistence. External agent products are optional backends, never a
+    requirement for the default path.
+    """
 
     def __init__(
         self,
@@ -51,7 +57,7 @@ class AirvisEngine:
         memory_path: Path | str | None = None,
         artifact_root: Path | str | None = None,
         register_default_agents: bool = True,
-        use_llm_planner: bool = False,
+        use_llm_planner: bool = True,
     ) -> None:
         self.config = config or AirvisConfig.load(environ=environ)
         if workspace is not None:
@@ -108,6 +114,9 @@ class AirvisEngine:
         self.context = ContextManager(
             self.config.context, artifacts=self.artifacts, workspace=self.workspace, memory=self.memory
         )
+        # Model-driven planning is the default. The planner is still strictly
+        # validated and falls back to the deterministic planner when the model
+        # is unavailable or returns an invalid graph.
         self.planner: Planner = (
             LLMPlanner(
                 self.providers,
@@ -149,8 +158,6 @@ class AirvisEngine:
         if self.config.mcp.enabled:
             self._install_mcp()
 
-    # -- execution -------------------------------------------------------------
-
     async def run(self, request: str, **kwargs: Any) -> WorkflowResult:
         return await self.orchestrator.run(request, **kwargs)
 
@@ -163,8 +170,6 @@ class AirvisEngine:
     def cancel(self, workflow_id: str) -> bool:
         return self.orchestrator.cancel(workflow_id)
 
-    # -- introspection ---------------------------------------------------------
-
     async def health_check(self) -> dict[str, Any]:
         return {
             "providers": await self.providers.health_check_all(),
@@ -174,6 +179,8 @@ class AirvisEngine:
             },
             "tools": len(self.tools),
             "workspace": str(self.workspace),
+            "native_primary": self.backends.has("native"),
+            "llm_planner": isinstance(self.planner, LLMPlanner),
         }
 
     def describe(self) -> dict[str, Any]:
@@ -187,6 +194,8 @@ class AirvisEngine:
             "tools": len(self.tools),
             "persistence": self.store.enabled,
             "mcp": self.config.mcp.enabled,
+            "native_primary": self.backends.has("native"),
+            "planner": type(self.planner).__name__,
         }
 
     async def close(self) -> None:
@@ -195,12 +204,10 @@ class AirvisEngine:
         await close_mcp_tools(self.tools)
         await self.backends.close()
 
-    # -- internals -------------------------------------------------------------
-
     def _persist_event(self, event: Any) -> None:
         try:
             self.store.save_event(event.to_dict())
-        except Exception:  # persistence is best-effort
+        except Exception:
             log.debug("failed to persist event", exc_info=True)
 
     def _install_mcp(self) -> None:
