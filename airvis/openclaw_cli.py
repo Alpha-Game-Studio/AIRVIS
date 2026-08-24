@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
-import sys
 from pathlib import Path
 
 from .openclaw import OpenClaw, OpenClawOptions
@@ -36,40 +36,31 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    options = OpenClawOptions(
-        strategy=args.strategy,
-        use_llm_planner=not args.no_llm_planner,
-        auto_repair=not args.no_repair,
-    )
     claw = OpenClaw(
         Path(args.workspace),
-        options=options,
+        options=OpenClawOptions(
+            strategy=args.strategy,
+            use_llm_planner=not args.no_llm_planner,
+            auto_repair=not args.no_repair,
+        ),
         approval_handler=always_approve if args.approve else None,
     )
 
     if args.command == "describe":
-        _emit(claw.describe(), args.json)
+        _emit(claw.describe())
         return 0
 
     if args.command == "resume":
-        result = claw.run_sync("resume") if False else claw.engine.run_sync("resume")
-        # Keep resume asynchronous at the runtime layer; this branch is replaced
-        # below so the CLI never fabricates a result for an unknown workflow.
-        import asyncio
         result = asyncio.run(claw.resume(args.workflow_id))
-        _emit(result.to_dict(), args.json)
-        return 0 if result.ok else 1
+    else:
+        result = claw.run_sync(args.request)
 
-    result = claw.run_sync(args.request)
-    _emit(result.to_dict(), args.json)
+    _emit(result.to_dict())
     return 0 if result.ok else 1
 
 
-def _emit(value: object, as_json: bool) -> None:
-    if as_json or isinstance(value, (dict, list)):
-        print(json.dumps(value, ensure_ascii=False, indent=2, default=str))
-    else:
-        print(value)
+def _emit(value: object) -> None:
+    print(json.dumps(value, ensure_ascii=False, indent=2, default=str))
 
 
 if __name__ == "__main__":
