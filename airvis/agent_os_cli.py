@@ -5,6 +5,7 @@ import argparse
 import json
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 from .agent_os import AgentOS
@@ -30,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     spawn.add_argument("request")
     spawn.add_argument("--strategy")
 
-    enqueue = sub.add_parser("enqueue")
+    enqueue = sub.add_parser("enqueue", help="queue a durable background job for the daemon")
     enqueue.add_argument("request")
     enqueue.add_argument("--strategy")
 
@@ -57,7 +58,6 @@ def main(argv: list[str] | None = None) -> int:
         return subprocess.call(command)
 
     if args.command == "enqueue":
-        import uuid
         queue = root / ".airvis" / "queue"
         queue.mkdir(parents=True, exist_ok=True)
         job_id = uuid.uuid4().hex
@@ -89,12 +89,12 @@ def main(argv: list[str] | None = None) -> int:
             return emit({"job_id": os.spawn(args.request, strategy=args.strategy)})
         if args.command == "job":
             if args.action == "list":
-                return emit(os.jobs())
+                return emit(os.jobs() + persisted_jobs(root))
             if not args.id:
                 print("job id is required", file=sys.stderr)
                 return 2
             if args.action == "show":
-                return emit(os.job(args.id))
+                return emit(os.job(args.id) or persisted_job(root, args.id))
             if args.action == "children":
                 return emit(os.children(args.id))
             return 0 if os.cancel_job(args.id) else 1
@@ -104,6 +104,28 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     finally:
         os.shutdown()
+
+
+def persisted_job(root: Path, job_id: str) -> dict[str, object] | None:
+    path = root / ".airvis" / "jobs" / f"{job_id}.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def persisted_jobs(root: Path) -> list[dict[str, object]]:
+    directory = root / ".airvis" / "jobs"
+    if not directory.is_dir():
+        return []
+    output: list[dict[str, object]] = []
+    for path in directory.glob("*.json"):
+        item = persisted_job(root, path.stem)
+        if item:
+            output.append(item)
+    return output
 
 
 def emit(value: object) -> int:
