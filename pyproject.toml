@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "airvis"
-version = "7.2.0"
-description = "AIRVIS autonomous agent engine"
+version = "7.3.0"
+description = "AIRVIS native autonomous AI agent engine"
 requires-python = ">=3.10"
 dependencies = [
-	"numpy>=1.24,<3",
-	"python-dotenv>=1.0,<2",
-	"websockets>=13",
+    "numpy>=1.24,<3",
+    "python-dotenv>=1.0,<2",
+    "websockets>=13",
 ]
 
 [project.optional-dependencies]
@@ -19,6 +19,7 @@ test = ["pytest>=8", "pytest-asyncio>=0.23"]
 
 [project.scripts]
 airvis = "airvis.cli:main"
+airvis-os = "airvis.agent_os_cli:main"
 airvis-claw = "airvis.openclaw_cli:main"
 
 [tool.setuptools.packages.find]
@@ -29,7 +30,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
-	"ignore::DeprecationWarning:airvis.*",
+    "ignore::DeprecationWarning:airvis.*",
 ]
 
 [tool.ruff]
@@ -39,9 +40,9 @@ target-version = "py310"
 [tool.ruff.lint]
 extend-select = ["I", "UP", "B", "SIM", "RUF"]
 ignore = [
-	"BLE001",
-	"RUF012",
-	"RUF001",
+    "BLE001",
+    "RUF012",
+    "RUF001",
 ]
 
 [tool.ruff.lint.per-file-ignores]
