@@ -3,12 +3,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
-import time
 from pathlib import Path
 
 from .agent_os import AgentOS
-from .core.asyncutil import run_blocking
 from .core.config import AirvisConfig
 from .engine import AirvisEngine
 
@@ -20,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     session = sub.add_parser("session")
-    session.add_argument("action", choices=("list", "show", "reset"), default="list")
+    session.add_argument("action", choices=("list", "show", "reset"))
     session.add_argument("name", nargs="?", default="default")
 
     memory = sub.add_parser("memory")
@@ -31,6 +30,10 @@ def main(argv: list[str] | None = None) -> int:
     spawn.add_argument("request")
     spawn.add_argument("--strategy")
 
+    enqueue = sub.add_parser("enqueue")
+    enqueue.add_argument("request")
+    enqueue.add_argument("--strategy")
+
     job = sub.add_parser("job")
     job.add_argument("action", choices=("list", "show", "cancel", "children"))
     job.add_argument("id", nargs="?")
@@ -39,10 +42,33 @@ def main(argv: list[str] | None = None) -> int:
     goal.add_argument("request")
     goal.add_argument("--strategy")
 
+    daemon = sub.add_parser("daemon", help="run the persistent background agent daemon")
+    daemon.add_argument("--poll", type=float, default=0.5)
+
     args = parser.parse_args(argv)
     config = AirvisConfig.load(args.config, search_from=args.workspace)
-    engine = AirvisEngine(config, workspace=args.workspace)
-    os = AgentOS(engine, root=args.workspace)
+    root = Path(args.workspace or config.workspace).expanduser().resolve()
+
+    if args.command == "daemon":
+        command = [sys.executable, "-m", "airvis.agent_os_daemon", "--workspace", str(root)]
+        if args.config:
+            command += ["--config", args.config]
+        command += ["--poll", str(args.poll)]
+        return subprocess.call(command)
+
+    if args.command == "enqueue":
+        import uuid
+        queue = root / ".airvis" / "queue"
+        queue.mkdir(parents=True, exist_ok=True)
+        job_id = uuid.uuid4().hex
+        (queue / f"{job_id}.json").write_text(
+            json.dumps({"job_id": job_id, "request": args.request, "strategy": args.strategy}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return emit({"job_id": job_id, "queued": True, "queue": str(queue)})
+
+    engine = AirvisEngine(config, workspace=root)
+    os = AgentOS(engine, root=root)
     try:
         if args.command == "session":
             if args.action == "list":
