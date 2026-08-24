@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "airvis"
-version = "7.3.0"
+version = "8.2.0"
 description = "AIRVIS native autonomous AI agent engine"
 requires-python = ">=3.10"
 dependencies = [
@@ -18,7 +18,7 @@ yaml = ["PyYAML>=6"]
 test = ["pytest>=8", "pytest-asyncio>=0.23"]
 
 [project.scripts]
-airvis = "airvis.cli:main"
+airvis = "airvis.launcher:main"
 airvis-os = "airvis.agent_os_cli:main"
 airvis-claw = "airvis.openclaw_cli:main"
 
