@@ -8,6 +8,8 @@ import json
 import sys
 from typing import Any
 
+COMMANDS = {"status", "health", "doctor", "version", "providers", "backends", "agents", "tools", "models", "workflow", "task", "plan", "chat", "agent", "tool", "memory", "plugins", "plugin", "tasks", "logs", "costs", "schedule", "config", "start", "stop", "restart", "server"}
+
 
 def _value(value: Any) -> str:
     if isinstance(value, bool):
@@ -45,16 +47,15 @@ def render(payload: Any, command: str) -> None:
                 print(f"{key.title():<12} {len(value)} configured")
         return
 
-    if command in {"providers", "backends", "agents", "tools", "models", "plugins"}:
-        if isinstance(payload, list):
-            for item in payload:
-                if isinstance(item, dict):
-                    name = item.get("id") or item.get("name") or item.get("provider") or item.get("model")
-                    detail = item.get("description") or item.get("model") or item.get("state")
-                    print(f"✓ {name or 'item'}" + (f" — {detail}" if detail else ""))
-                else:
-                    print(f"✓ {item}")
-            return
+    if command in {"providers", "backends", "agents", "tools", "models", "plugins"} and isinstance(payload, list):
+        for item in payload:
+            if isinstance(item, dict):
+                name = item.get("id") or item.get("name") or item.get("provider") or item.get("model")
+                detail = item.get("description") or item.get("model") or item.get("state")
+                print(f"✓ {name or 'item'}" + (f" — {detail}" if detail else ""))
+            else:
+                print(f"✓ {item}")
+        return
 
     if isinstance(payload, dict):
         _print_mapping(payload)
@@ -71,13 +72,11 @@ def main(argv: list[str] | None = None) -> int:
         from .setup import run
         return run()
 
-    # --json is the explicit machine-readable interface. The legacy CLI remains
-    # the engine contract; this launcher only changes presentation for humans.
     if "--json" in args:
         from .cli import main as cli_main
         return cli_main(args)
 
-    command = next((item for item in args if not item.startswith("-")), "")
+    command = next((item for item in args if item in COMMANDS), "")
     from .cli import main as cli_main
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
