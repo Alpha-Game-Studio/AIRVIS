@@ -8,7 +8,12 @@ import json
 import sys
 from typing import Any
 
-COMMANDS = {"status", "health", "doctor", "version", "providers", "backends", "agents", "tools", "models", "workflow", "task", "plan", "chat", "agent", "tool", "memory", "plugins", "plugin", "tasks", "logs", "costs", "schedule", "config", "setup", "gateway", "start", "stop", "restart", "server"}
+COMMANDS = {
+    "status", "health", "doctor", "version", "providers", "backends", "agents", "tools",
+    "models", "workflow", "task", "plan", "chat", "agent", "tool", "memory", "plugins",
+    "plugin", "skills", "skill", "tasks", "logs", "costs", "schedule", "config", "setup",
+    "gateway", "start", "stop", "restart", "server",
+}
 
 
 def _value(value: Any) -> str:
@@ -36,7 +41,7 @@ def render(payload: Any, command: str) -> None:
     if command == "status" and isinstance(payload, dict):
         print("AIRVIS 8.2")
         print("────────────────────────────────────────")
-        for key in ("providers", "backends", "agents", "tools"):
+        for key in ("providers", "backends", "agents", "tools", "skills", "plugins"):
             if key not in payload:
                 continue
             value = payload[key]
@@ -45,7 +50,7 @@ def render(payload: Any, command: str) -> None:
             elif isinstance(value, dict):
                 print(f"{key.title():<12} {len(value)} configured")
         return
-    if command in {"providers", "backends", "agents", "tools", "models", "plugins"} and isinstance(payload, list):
+    if command in {"providers", "backends", "agents", "tools", "models", "plugins", "skills"} and isinstance(payload, list):
         for item in payload:
             if isinstance(item, dict):
                 name = item.get("id") or item.get("name") or item.get("provider") or item.get("model")
@@ -63,6 +68,36 @@ def render(payload: Any, command: str) -> None:
         print(_value(payload))
 
 
+def _skills_command(args: list[str]) -> int:
+    from .skills import SkillRegistry
+
+    registry = SkillRegistry()
+    action = args[1] if len(args) > 1 else "list"
+    if action == "list":
+        payload = registry.list()
+        render(payload, "skills")
+        return 0
+    if action == "create" and len(args) >= 3:
+        print(registry.create(args[2]))
+        return 0
+    if action in {"enable", "disable"} and len(args) >= 3:
+        ok = registry.enable(args[2], action == "enable")
+        if not ok:
+            print(f"skill not found: {args[2]}", file=sys.stderr)
+            return 2
+        print("updated")
+        return 0
+    if action == "remove" and len(args) >= 3:
+        ok = registry.remove(args[2])
+        if not ok:
+            print(f"skill not found: {args[2]}", file=sys.stderr)
+            return 2
+        print("removed")
+        return 0
+    print("usage: airvis skills [list|create|enable|disable|remove] [name]", file=sys.stderr)
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args == ["--version"] or args == ["-V"]:
@@ -72,10 +107,12 @@ def main(argv: list[str] | None = None) -> int:
     if args and args[0] == "setup":
         from .setup import run
         return run()
+    if args and args[0] in {"skills", "skill"}:
+        return _skills_command(args)
     if args and args[0] == "gateway":
-        # Gateway is the long-running voice/channel entry point. The current
-        # HTTP gateway is exposed by the existing server manager; keeping this
-        # alias stable lets the voice/channel layer evolve independently.
+        # Gateway is the long-running voice/channel entry point. The HTTP
+        # server owns the live channel surface; the orchestration engine used
+        # by requests remains the native AIRVIS engine.
         args = ["server", *args[1:]]
     if "--json" in args:
         from .cli import main as cli_main
