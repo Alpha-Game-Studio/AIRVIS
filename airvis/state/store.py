@@ -99,14 +99,8 @@ class StateStore:
             db.execute(
                 "INSERT OR REPLACE INTO workflows (id, request, status, created_at, updated_at, payload) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    workflow_id,
-                    str(workflow.get("request", "")),
-                    str(workflow.get("status", "created")),
-                    created,
-                    now,
-                    _dumps(workflow),
-                ),
+                (workflow_id, str(workflow.get("request", "")), str(workflow.get("status", "created")),
+                 created, now, _dumps(workflow)),
             )
 
     def load_workflow(self, workflow_id: str) -> dict[str, Any] | None:
@@ -146,22 +140,15 @@ class StateStore:
         with self._lock, self._connect() as db:
             db.execute(
                 "INSERT OR REPLACE INTO tasks (id, workflow_id, status, updated_at, payload) VALUES (?, ?, ?, ?, ?)",
-                (
-                    str(task.get("id")),
-                    task.get("workflow_id"),
-                    str(task.get("status", "queued")),
-                    time.time(),
-                    _dumps(task),
-                ),
+                (str(task.get("id")), task.get("workflow_id"), str(task.get("status", "queued")),
+                 time.time(), _dumps(task)),
             )
 
     def load_tasks(self, workflow_id: str) -> list[dict[str, Any]]:
         if not self.enabled:
             return []
         with self._lock, self._connect() as db:
-            rows = db.execute(
-                "SELECT payload FROM tasks WHERE workflow_id = ? ORDER BY updated_at", (workflow_id,)
-            ).fetchall()
+            rows = db.execute("SELECT payload FROM tasks WHERE workflow_id = ? ORDER BY updated_at", (workflow_id,)).fetchall()
         return [json.loads(row["payload"]) for row in rows]
 
     def load_task(self, task_id: str) -> dict[str, Any] | None:
@@ -178,17 +165,33 @@ class StateStore:
             return
         with self._lock, self._connect() as db:
             db.execute(
-                "INSERT OR REPLACE INTO events (id, workflow_id, task_id, type, timestamp, payload) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    str(event.get("id") or uuid.uuid4().hex),
-                    event.get("workflow_id"),
-                    event.get("task_id"),
-                    str(event.get("type", "")),
-                    float(event.get("timestamp", time.time())),
-                    _dumps(event),
-                ),
+                "INSERT OR REPLACE INTO events (id, workflow_id, task_id, type, timestamp, payload) VALUES (?, ?, ?, ?, ?, ?)",
+                (str(event.get("id") or uuid.uuid4().hex), event.get("workflow_id"), event.get("task_id"),
+                 str(event.get("type", "")), float(event.get("timestamp", time.time())), _dumps(event)),
             )
+
+    def record_event(self, event: Any) -> None:
+        """Persist an EventBus event in the canonical event table.
+
+        EventBus emits Event objects, while the state store historically exposed
+        ``save_event`` for dictionaries. Keep both APIs and normalize at this
+        boundary so persistence never depends on the caller's event representation.
+        """
+        if not self.enabled:
+            return
+        if isinstance(event, dict):
+            payload = dict(event)
+        elif hasattr(event, "to_dict"):
+            payload = dict(event.to_dict())
+        else:
+            payload = {
+                key: getattr(event, key)
+                for key in ("id", "workflow_id", "task_id", "type", "timestamp")
+                if hasattr(event, key)
+            }
+            if hasattr(event, "data") and isinstance(event.data, dict):
+                payload.update(event.data)
+        self.save_event(payload)
 
     def list_events(self, workflow_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
         if not self.enabled:
@@ -230,38 +233,27 @@ class StateStore:
         column, value = next(iter(extra.items()))
         with self._lock, self._connect() as db:
             db.execute(
-                f"INSERT OR REPLACE INTO {table} (id, workflow_id, task_id, {column}, created_at, payload) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    str(payload.get("id") or uuid.uuid4().hex),
-                    payload.get("workflow_id"),
-                    payload.get("task_id"),
-                    str(value) if value is not None else None,
-                    time.time(),
-                    _dumps(payload),
-                ),
+                f"INSERT OR REPLACE INTO {table} (id, workflow_id, task_id, {column}, created_at, payload) VALUES (?, ?, ?, ?, ?, ?)",
+                (str(payload.get("id") or uuid.uuid4().hex), payload.get("workflow_id"), payload.get("task_id"),
+                 str(value) if value is not None else None, time.time(), _dumps(payload)),
             )
 
     def _list_generic(self, table: str, workflow_id: str) -> list[dict[str, Any]]:
         if not self.enabled:
             return []
         with self._lock, self._connect() as db:
-            rows = db.execute(
-                f"SELECT payload FROM {table} WHERE workflow_id = ? ORDER BY created_at", (workflow_id,)
-            ).fetchall()
+            rows = db.execute(f"SELECT payload FROM {table} WHERE workflow_id = ? ORDER BY created_at", (workflow_id,)).fetchall()
         return [json.loads(row["payload"]) for row in rows]
 
 
 class MemoryStore:
-    """Long-term memory; unchanged in behaviour from AIRVIS V4."""
+    """Long-term memory."""
 
     def __init__(self, path: Path | str | None = None) -> None:
         self.path = Path(path).expanduser() if path else Path.home() / ".airvis" / "memory.db"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as db:
-            db.execute(
-                "CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, content TEXT NOT NULL, created REAL NOT NULL)"
-            )
+            db.execute("CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, content TEXT NOT NULL, created REAL NOT NULL)")
 
     def add(self, content: str) -> str:
         memory_id = uuid.uuid4().hex
