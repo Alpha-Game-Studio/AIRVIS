@@ -1,12 +1,13 @@
-"""Skill registry for AIRVIS orchestration.
+"""Runtime skill registry for AIRVIS orchestration.
 
-A skill is a declarative capability package under ``~/.airvis/skills/<name>``.
+A skill is a real, local capability package under ``~/.airvis/skills/<name>``.
 Each package has ``manifest.json`` and may contain ``SKILL.md`` instructions.
-Skills are injected into agent context; they do not execute arbitrary code.
+Skills are loaded into agent context and never execute arbitrary Python code.
 """
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,10 +25,15 @@ class Skill:
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "description": self.description,
-                "tools": sorted(self.tools), "capabilities": sorted(self.capabilities),
-                "enabled": self.enabled, "path": str(self.path) if self.path else None,
-                "error": self.error}
+        return {
+            "name": self.name,
+            "description": self.description,
+            "tools": sorted(self.tools),
+            "capabilities": sorted(self.capabilities),
+            "enabled": self.enabled,
+            "path": str(self.path) if self.path else None,
+            "error": self.error,
+        }
 
 
 class SkillRegistry:
@@ -55,14 +61,22 @@ class SkillRegistry:
                     path=manifest.parent,
                 )
             except (OSError, ValueError, KeyError, TypeError) as exc:
-                self.skills[manifest.parent.name] = Skill(manifest.parent.name, path=manifest.parent, enabled=False, error=str(exc))
+                self.skills[manifest.parent.name] = Skill(
+                    manifest.parent.name,
+                    path=manifest.parent,
+                    enabled=False,
+                    error=str(exc),
+                )
 
     def list(self) -> list[dict[str, Any]]:
         return [skill.to_dict() for skill in self.skills.values()]
 
     def prompt_context(self, capabilities: set[str] | None = None) -> str:
         capabilities = capabilities or set()
-        selected = [s for s in self.skills.values() if s.enabled and (not s.capabilities or s.capabilities & capabilities)]
+        selected = [
+            skill for skill in self.skills.values()
+            if skill.enabled and (not skill.capabilities or skill.capabilities & capabilities)
+        ]
         if not selected:
             return ""
         blocks = ["## Installed AIRVIS Skills"]
@@ -76,8 +90,25 @@ class SkillRegistry:
             raise ValueError("skill name must be a simple directory name")
         target = self.directory / name
         target.mkdir(parents=True, exist_ok=False)
-        (target / "manifest.json").write_text(json.dumps({"name": name, "version": "1.0.0", "description": "", "tools": [], "capabilities": [], "enabled": True}, indent=2) + "\n", encoding="utf-8")
-        (target / "SKILL.md").write_text(f"# {name}\n\nDescribe the instructions this skill adds to AIRVIS agents.\n", encoding="utf-8")
+        (target / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "name": name,
+                    "version": "1.0.0",
+                    "description": "",
+                    "tools": [],
+                    "capabilities": [],
+                    "enabled": True,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n",
+            encoding="utf-8",
+        )
+        (target / "SKILL.md").write_text(
+            f"# {name}\n\nDescribe the instructions this skill adds to AIRVIS agents.\n",
+            encoding="utf-8",
+        )
         self.discover()
         return target
 
@@ -94,3 +125,14 @@ class SkillRegistry:
             return False
         skill.enabled = enabled
         return True
+
+    def remove(self, name: str) -> bool:
+        skill = self.skills.get(name)
+        if not skill or not skill.path or not skill.path.is_dir():
+            return False
+        shutil.rmtree(skill.path)
+        del self.skills[name]
+        return True
+
+
+__all__ = ["Skill", "SkillRegistry"]
