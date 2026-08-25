@@ -17,13 +17,7 @@ from .base import RiskLevel, Tool, ToolContext, ToolResult
 
 
 class ToolRegistry:
-    """Holds tools and executes them through the security pipeline.
-
-    Provider APIs may require function names containing only ``[A-Za-z0-9_-]``.
-    AIRVIS keeps its namespaced names (for example ``filesystem.read``) as the
-    canonical identity and accepts the provider-safe alias at the execution
-    boundary as well.
-    """
+    """Canonical AIRVIS tool registry with provider-safe aliases."""
 
     def __init__(self, workspace: Path | str | None = None, *, permissions: PermissionManager | None = None,
                  event_bus: EventBus | None = None, install_builtins: bool = True) -> None:
@@ -115,12 +109,14 @@ class ToolRegistry:
         started = time.perf_counter()
         try:
             tool.validate_arguments(arguments)
+            normalized_agent_tools = ({self._canonical(item) for item in agent_tools} if agent_tools is not None else None)
             await self.permissions.authorize(tool, arguments, agent_permissions=agent_permissions,
-                                             agent_tools={self._canonical(item) for item in agent_tools} if agent_tools else agent_tools,
-                                             confirm=confirm, approval_handler=approval_handler,
-                                             workflow_id=ctx.workflow_id, task_id=ctx.task_id, agent_id=ctx.agent_id)
+                                             agent_tools=normalized_agent_tools, confirm=confirm,
+                                             approval_handler=approval_handler, workflow_id=ctx.workflow_id,
+                                             task_id=ctx.task_id, agent_id=ctx.agent_id)
         except PermissionDeniedError:
-            self._emit(EventType.TOOL_FAILED, canonical, ctx, status="denied', duration_ms=(time.perf_counter() - started) * 1000)
+            self._emit(EventType.TOOL_FAILED, canonical, ctx, status="denied",
+                       duration_ms=(time.perf_counter() - started) * 1000)
             raise
         try:
             output = await asyncio.wait_for(tool.run(ctx, **arguments), timeout=effective_timeout)
@@ -129,7 +125,8 @@ class ToolRegistry:
             self._emit(EventType.TOOL_FAILED, canonical, ctx, status="timeout", duration_ms=duration)
             raise ToolTimeoutError(f"{canonical} timed out after {effective_timeout}s", tool=canonical, timeout=effective_timeout) from exc
         except (PermissionDeniedError, ToolExecutionError):
-            self._emit(EventType.TOOL_FAILED, canonical, ctx, status="failed', duration_ms=(time.perf_counter() - started) * 1000)
+            self._emit(EventType.TOOL_FAILED, canonical, ctx, status="failed",
+                       duration_ms=(time.perf_counter() - started) * 1000)
             raise
         except Exception as exc:
             duration = (time.perf_counter() - started) * 1000
@@ -153,7 +150,6 @@ class ToolRegistry:
 
 
 def _provider_safe_name(name: str) -> str:
-    """Mirror the provider-side OpenAI naming restriction."""
     import re
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", str(name))
     safe = re.sub(r"_+", "_", safe).strip("_") or "tool"
