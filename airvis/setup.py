@@ -1,9 +1,9 @@
 """Interactive first-run setup for AIRVIS.
 
-Setup configures real runtime dependencies: provider credentials, model,
-voice, channels and orchestration. Secrets are stored in a user-only env file
-and are loaded by the provider/channel layer; they are never written to the
-workspace configuration.
+The wizard follows the product shape of modern agent CLIs: first-run setup
+configures the real provider/model, voice, channels and orchestration stack;
+subsequent section commands can reconfigure one area without rebuilding the
+whole configuration. Secrets stay in a user-only credentials file.
 """
 
 from __future__ import annotations
@@ -26,10 +26,7 @@ SKILL_DIR = Path.home() / ".airvis" / "skills"
 
 PROVIDERS = ("openrouter", "openai", "anthropic", "gemini", "xai", "ollama")
 MODELS: dict[str, tuple[str, ...]] = {
-    "openrouter": (
-        "openai/gpt-5-mini", "openai/gpt-5", "anthropic/claude-sonnet-4",
-        "google/gemini-2.5-pro", "x-ai/grok-4", "custom",
-    ),
+    "openrouter": ("openai/gpt-5-mini", "openai/gpt-5", "anthropic/claude-sonnet-4", "google/gemini-2.5-pro", "x-ai/grok-4", "custom"),
     "openai": ("gpt-5-mini", "gpt-5", "gpt-4o-mini", "custom"),
     "anthropic": ("claude-sonnet-4", "claude-opus-4", "custom"),
     "gemini": ("gemini-2.5-flash", "gemini-2.5-pro", "custom"),
@@ -203,7 +200,44 @@ def _installed_names(directory: Path) -> list[str]:
     return sorted(path.name for path in directory.iterdir() if path.is_dir())
 
 
-def run() -> int:
+def _save_model(provider: str, model: str, credentials: dict[str, str], current: dict[str, Any], existing: dict[str, Any]) -> None:
+    _secret_for(provider, credentials)
+    current.setdefault("providers", {})["default"] = provider
+    current["providers"]["model"] = model
+    current["providers"]["fallbacks"] = [p for p in existing.get("providers", []) if p != provider]
+    current.setdefault("backends", {})["enabled"] = ["native"]
+    SETUP_PATH.parent.mkdir(parents=True, exist_ok=True)
+    setup_data = _load(SETUP_PATH)
+    setup_data.update({"version": 6, "runtime": "native", "provider": provider, "default_provider": provider, "model": model})
+    SETUP_PATH.write_text(json.dumps(setup_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    WORKSPACE_CONFIG.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _write_credentials(credentials)
+    print(f"\n✓ Model configured: {provider} / {model}")
+
+
+def _run_model_section() -> int:
+    existing = _load(SETUP_PATH)
+    current = _load(WORKSPACE_CONFIG)
+    credentials = _env_file()
+    old_provider = str(existing.get("default_provider") or current.get("providers", {}).get("default") or "openrouter")
+    provider = _choose("Provider", PROVIDERS, old_provider)
+    options = MODELS[provider]
+    old_model = str(existing.get("model") or current.get("providers", {}).get("model") or options[0])
+    model = _choose(f"{provider} 모델", options, old_model if old_model in options else options[0])
+    if model == "custom":
+        model = _ask("모델 ID")
+    _save_model(provider, model, credentials, current, existing)
+    return 0
+
+
+def run(section: str | None = None) -> int:
+    """Run full setup or one Hermes-style configuration section."""
+    if section in {"model", "provider"}:
+        return _run_model_section()
+    if section not in {None, "full", "voice", "gateway", "tools", "agent", "channels"}:
+        print(f"unknown setup section: {section}", file=sys.stderr)
+        return 2
+
     existing = _load(SETUP_PATH)
     current = _load(WORKSPACE_CONFIG)
     credentials = _env_file()
@@ -244,18 +278,12 @@ def run() -> int:
     PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
     SKILL_DIR.mkdir(parents=True, exist_ok=True)
     setup_data = {
-        "version": 5,
-        "runtime": "native",
-        "provider": default_provider,
-        "providers": providers,
-        "default_provider": default_provider,
-        "model": model,
-        "fallback_providers": fallbacks,
-        "channels": channels,
+        "version": 6, "runtime": "native", "provider": default_provider,
+        "providers": providers, "default_provider": default_provider, "model": model,
+        "fallback_providers": fallbacks, "channels": channels,
         "voice": {"enabled": voice_enabled, "stt_provider": stt, "tts_provider": tts, "voice_id": voice_id, "language": language},
         "orchestrator": {"strategy": strategy, "backend": "native", "max_concurrency": max_concurrency, "review": review, "auto_repair": auto_repair},
-        "plugins": _installed_names(PLUGIN_DIR),
-        "skills": _installed_names(SKILL_DIR),
+        "plugins": _installed_names(PLUGIN_DIR), "skills": _installed_names(SKILL_DIR),
     }
     SETUP_PATH.parent.mkdir(parents=True, exist_ok=True)
     SETUP_PATH.write_text(json.dumps(setup_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
