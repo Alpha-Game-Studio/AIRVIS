@@ -1,9 +1,4 @@
-"""Interactive first-run setup for AIRVIS.
-
-AIRVIS is a native agent operating system. External runtimes such as OpenClaw
-or Hermes are not required to run the engine and are deliberately not selected
-by this wizard.
-"""
+"""Interactive first-run setup for AIRVIS."""
 
 from __future__ import annotations
 
@@ -26,9 +21,6 @@ def _ask(prompt: str, default: str = "") -> str:
     try:
         value = input(f"{prompt}{suffix}: ").strip()
     except (EOFError, StopIteration):
-        # Setup is also used by tests, installers and piped/non-interactive
-        # environments. Exhausted input must mean "accept the default", not
-        # crash halfway through the wizard.
         return default
     return value or default
 
@@ -92,14 +84,6 @@ def _bool(prompt: str, default: bool) -> bool:
 
 
 def run() -> int:
-    print("\n╭────────────────────────────────────────────╮")
-    print("│              AIRVIS 8.2 SETUP              │")
-    print("│       Native Agent Operating System        │")
-    print("╰────────────────────────────────────────────╯")
-    print("Configure AIRVIS like an agent OS. Run `airvis setup` again to edit it.\n")
-    print("Runtime: AIRVIS Native Engine (always enabled)")
-    print("OpenClaw/Hermes are NOT required and are not selected by this setup.\n")
-
     existing = _load(SETUP_PATH)
     current = _load(WORKSPACE_CONFIG)
 
@@ -111,7 +95,6 @@ def run() -> int:
     providers = _multi("Providers", PROVIDERS, previous_providers) or ["ollama"]
     default_provider = _choose("Default provider", tuple(providers), providers[0])
     fallbacks = [item for item in providers if item != default_provider]
-
     channels = _multi("Channels", CHANNELS, list(existing.get("channels", ["cli"]))) or ["cli"]
 
     old_orchestrator = existing.get("orchestrator", {})
@@ -122,23 +105,14 @@ def run() -> int:
     max_concurrency = int(_ask("Maximum concurrent agent tasks", str(old_orchestrator.get("max_concurrency", 4))))
     review = _bool("Enable automatic review?", bool(old_orchestrator.get("review", True)))
     auto_repair = _bool("Enable automatic repair/retry?", bool(old_orchestrator.get("auto_repair", True)))
-
-    print("\nPlugins")
-    print("Plugins are native AIRVIS extensions. Enter installed plugin IDs separated by commas.")
     plugins = _list_input("Enabled plugins", list(existing.get("plugins", [])))
-
-    print("\nSkills")
-    print("Skills are reusable instructions/capability packs loaded by the native agent.")
     skills = _list_input("Enabled skills", list(existing.get("skills", [])))
-
-    if any(item not in {"ollama", "mock"} for item in providers):
-        print("\nProvider credentials")
-        print("API keys are never written to AIRVIS config. Use the provider's environment variable.")
-        print("Examples: OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, XAI_API_KEY.")
 
     setup_data = {
         "version": 2,
         "runtime": "native",
+        # Keep the legacy singular field for existing installers/tests.
+        "provider": default_provider,
         "providers": providers,
         "default_provider": default_provider,
         "fallback_providers": fallbacks,
@@ -169,18 +143,7 @@ def run() -> int:
     current.setdefault("repair", {})["allow_human_review"] = True
     if not auto_repair:
         current["repair"]["max_retries"] = 0
-
     WORKSPACE_CONFIG.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-    print(f"\n✓ Setup metadata: {SETUP_PATH}")
-    print(f"✓ Engine config: {WORKSPACE_CONFIG}")
-    print("✓ Runtime: AIRVIS Native Engine")
-    print(f"✓ Providers: {', '.join(providers)} (default: {default_provider})")
-    print(f"✓ Channels: {', '.join(channels)}")
-    print(f"✓ Orchestrator: {strategy}, concurrency={max_concurrency}")
-    print(f"✓ Plugins: {', '.join(plugins) if plugins else 'none'}")
-    print(f"✓ Skills: {', '.join(skills) if skills else 'none'}")
-    print("\nSetup complete. Run `airvis status`, `airvis health`, or `airvis chat \"...\"`.")
     return 0
 
 
