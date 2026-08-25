@@ -305,7 +305,15 @@ def _resolve_config_path(
         if not candidate.is_file():
             raise ConfigError(f"AIRVIS_CONFIG points at a missing file: {candidate}")
         return candidate
-    roots = [Path(search_from).expanduser() if search_from else Path.cwd(), Path.home() / ".airvis"]
+
+    # An explicit workspace is an isolation boundary. Do not silently inherit
+    # ~/.airvis configuration from an unrelated user workspace. The home config
+    # remains available for the normal no-workspace invocation.
+    if search_from is not None:
+        roots = [Path(search_from).expanduser()]
+    else:
+        roots = [Path.cwd(), Path.home() / ".airvis"]
+
     for root in roots:
         for name in CONFIG_FILENAMES:
             candidate = root / name
