@@ -1,10 +1,8 @@
 """Interactive first-run setup for AIRVIS.
 
-AIRVIS is a native agent operating system.  External runtimes such as OpenClaw
+AIRVIS is a native agent operating system. External runtimes such as OpenClaw
 or Hermes are not required to run the engine and are deliberately not selected
-by this wizard.  The setup command configures the same high-level control
-plane users expect from an agent OS: providers, channels, orchestration,
-plugins and skills.
+by this wizard.
 """
 
 from __future__ import annotations
@@ -25,7 +23,13 @@ STRATEGIES = ("balanced", "cheap", "fast", "quality", "premium", "local_only")
 
 def _ask(prompt: str, default: str = "") -> str:
     suffix = f" [{default}]" if default else ""
-    value = input(f"{prompt}{suffix}: ").strip()
+    try:
+        value = input(f"{prompt}{suffix}: ").strip()
+    except (EOFError, StopIteration):
+        # Setup is also used by tests, installers and piped/non-interactive
+        # environments. Exhausted input must mean "accept the default", not
+        # crash halfway through the wizard.
+        return default
     return value or default
 
 
@@ -99,7 +103,6 @@ def run() -> int:
     existing = _load(SETUP_PATH)
     current = _load(WORKSPACE_CONFIG)
 
-    # 1. Providers ------------------------------------------------------------
     previous_providers = list(existing.get("providers", []))
     if not previous_providers and existing.get("provider"):
         previous_providers = [str(existing["provider"])]
@@ -109,21 +112,17 @@ def run() -> int:
     default_provider = _choose("Default provider", tuple(providers), providers[0])
     fallbacks = [item for item in providers if item != default_provider]
 
-    # 2. Channels -------------------------------------------------------------
     channels = _multi("Channels", CHANNELS, list(existing.get("channels", ["cli"]))) or ["cli"]
 
-    # 3. Orchestrator ---------------------------------------------------------
     old_orchestrator = existing.get("orchestrator", {})
     strategy = _choose(
-        "Orchestrator strategy",
-        STRATEGIES,
+        "Orchestrator strategy", STRATEGIES,
         str(old_orchestrator.get("strategy", current.get("routing", {}).get("strategy", "balanced"))),
     )
     max_concurrency = int(_ask("Maximum concurrent agent tasks", str(old_orchestrator.get("max_concurrency", 4))))
     review = _bool("Enable automatic review?", bool(old_orchestrator.get("review", True)))
     auto_repair = _bool("Enable automatic repair/retry?", bool(old_orchestrator.get("auto_repair", True)))
 
-    # 4. Plugins / skills -----------------------------------------------------
     print("\nPlugins")
     print("Plugins are native AIRVIS extensions. Enter installed plugin IDs separated by commas.")
     plugins = _list_input("Enabled plugins", list(existing.get("plugins", [])))
@@ -132,7 +131,6 @@ def run() -> int:
     print("Skills are reusable instructions/capability packs loaded by the native agent.")
     skills = _list_input("Enabled skills", list(existing.get("skills", [])))
 
-    # API keys remain environment-managed; setup never writes secrets.
     if any(item not in {"ollama", "mock"} for item in providers):
         print("\nProvider credentials")
         print("API keys are never written to AIRVIS config. Use the provider's environment variable.")
@@ -161,7 +159,6 @@ def run() -> int:
     SKILL_DIR.mkdir(parents=True, exist_ok=True)
     SETUP_PATH.write_text(json.dumps(setup_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    # Only write keys understood by AirvisConfig. Keep the actual engine native.
     current.setdefault("providers", {})["default"] = default_provider
     current["providers"]["fallbacks"] = fallbacks
     current.setdefault("routing", {})["strategy"] = strategy
@@ -177,7 +174,7 @@ def run() -> int:
 
     print(f"\n✓ Setup metadata: {SETUP_PATH}")
     print(f"✓ Engine config: {WORKSPACE_CONFIG}")
-    print(f"✓ Runtime: AIRVIS Native Engine")
+    print("✓ Runtime: AIRVIS Native Engine")
     print(f"✓ Providers: {', '.join(providers)} (default: {default_provider})")
     print(f"✓ Channels: {', '.join(channels)}")
     print(f"✓ Orchestrator: {strategy}, concurrency={max_concurrency}")
@@ -185,3 +182,6 @@ def run() -> int:
     print(f"✓ Skills: {', '.join(skills) if skills else 'none'}")
     print("\nSetup complete. Run `airvis status`, `airvis health`, or `airvis chat \"...\"`.")
     return 0
+
+
+__all__ = ["run"]
