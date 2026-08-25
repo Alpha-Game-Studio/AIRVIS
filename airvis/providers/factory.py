@@ -12,6 +12,11 @@ from .base import Provider
 from .http import AnthropicProvider, GeminiProvider, OpenAICompatibleProvider
 from .mock import MockProvider
 from .registry import ProviderRegistry
+from .tls import install_secure_default_opener
+
+# Keep HTTPS certificate verification enabled while using a portable CA bundle
+# on Python installations whose macOS trust store is incomplete.
+install_secure_default_opener()
 
 OPENAI_COMPATIBLE: dict[str, dict[str, Any]] = {
     "openai": {"base_url": "https://api.openai.com/v1", "key_env": "OPENAI_API_KEY", "model_env": "OPENAI_MODEL", "model": "gpt-4o-mini", "quality": 0.85, "cost_in": 0.15, "cost_out": 0.6},
