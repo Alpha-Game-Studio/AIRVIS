@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Local control surface for AIRVIS.
-
-The server intentionally uses only the Python standard library and binds to
-localhost so desktop automation is never exposed to the network.
-"""
+"""Local control surface and voice gateway for AIRVIS."""
 
 from __future__ import annotations
 
@@ -16,14 +12,35 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+BASE_DIR = Path(__file__).resolve().parent
+
+
+def _load_airvis_credentials() -> None:
+    """Load secrets created by ``airvis setup`` before voice/runtime imports."""
+    path = Path.home() / ".airvis" / "credentials.env"
+    if not path.is_file():
+        return
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key, value = key.strip(), value.strip().strip('"').strip("'")
+            if key and value and not os.environ.get(key):
+                os.environ[key] = value
+    except OSError:
+        pass
+
+
+_load_airvis_credentials()
+
 import config
 import jarvis
 from airvis.core.asyncutil import run_blocking
 from airvis.core.errors import ApprovalRequiredError, PermissionDeniedError
 from airvis.runtime import AgentRuntime
 
-
-BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
 HOST = os.environ.get("AIRVIS_HOST", "127.0.0.1")
 PORT = int(os.environ.get("AIRVIS_PORT", "8765"))
@@ -52,7 +69,7 @@ SETTING_DEFINITIONS = {
     "OPENCLAW_TIMEOUT": ("float", False),
 }
 SETTING_DEFAULTS = {
-    "JARVIS_STT_PROVIDER": "speech_recognition",
+    "JARVIS_STT_PROVIDER": "openai",
     "JARVIS_STT_LANGUAGE": "ko-KR",
     "OPENCLAW_AGENT": "main",
     "JARVIS_VAD_THRESHOLD": 0.025,
@@ -87,33 +104,26 @@ def _write_env_values(values: dict[str, object]) -> None:
     for line in lines:
         key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else ""
         if key in values:
-            output.append(f"{key}={values[key]}")
-            handled.add(key)
+            output.append(f"{key}={values[key]}"); handled.add(key)
         else:
             output.append(line)
     for key, value in values.items():
-        if key not in handled:
-            output.append(f"{key}={value}")
+        if key not in handled: output.append(f"{key}={value}")
     env_path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
 
 
 def update_settings(payload: dict[str, object]) -> dict[str, object]:
     values: dict[str, object] = {}
     for name, (kind, _) in SETTING_DEFINITIONS.items():
-        if name not in payload:
-            continue
+        if name not in payload: continue
         value = payload[name]
         if kind == "bool":
-            if not isinstance(value, bool):
-                raise ValueError(f"{name} must be boolean")
+            if not isinstance(value, bool): raise ValueError(f"{name} must be boolean")
         elif kind == "float":
             value = float(value)
-            if value < 0:
-                raise ValueError(f"{name} must be positive")
-        else:
-            value = str(value).strip()
+            if value < 0: raise ValueError(f"{name} must be positive")
+        else: value = str(value).strip()
         values[name] = value
-
     _write_env_values(values)
     for name, value in values.items():
         setattr(jarvis, name, value)
@@ -125,11 +135,8 @@ def _speak_async(text: str) -> None:
     def worker() -> None:
         with TTS_LOCK:
             TTS_ACTIVE.set()
-            try:
-                jarvis.speak_text(text)
-            finally:
-                TTS_ACTIVE.clear()
-
+            try: jarvis.speak_text(text)
+            finally: TTS_ACTIVE.clear()
     threading.Thread(target=worker, daemon=True).start()
 
 
@@ -141,237 +148,70 @@ class AirvisHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, payload: dict, status: int = HTTPStatus.OK) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        self.send_response(status); self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
 
     def _read_json(self) -> dict:
-        length = int(self.headers.get("Content-Length", "0"))
-        return json.loads(self.rfile.read(length) or b"{}")
+        length = int(self.headers.get("Content-Length", "0")); return json.loads(self.rfile.read(length) or b"{}")
 
     def _authorized(self) -> bool:
         protected = bool(API_TOKEN) or HOST not in {"127.0.0.1", "localhost", "::1"}
-        if not protected:
-            return True
-        header = self.headers.get("Authorization", "")
-        return bool(API_TOKEN) and header == f"Bearer {API_TOKEN}"
+        if not protected: return True
+        return self.headers.get("Authorization", "") == f"Bearer {API_TOKEN}"
 
     def do_GET(self) -> None:
-        if not self._authorized():
-            self._send_json({"error": "authentication required"}, HTTPStatus.UNAUTHORIZED)
-            return
+        if not self._authorized(): self._send_json({"error": "authentication required"}, HTTPStatus.UNAUTHORIZED); return
         path = urlparse(self.path).path
         if path == "/api/status":
-            self._send_json({
-                "state": "busy" if jarvis._voice_session_active.is_set() else "standby",
-                "tts": "speaking" if TTS_ACTIVE.is_set() else "idle",
-                "engine": jarvis.get_current_engine(),
-                "settings": settings_payload(),
-                "time": time.time(),
-                "native": NATIVE_RUNTIME.status(),
-            })
-            return
-        if path == "/health":
-            self._send_json({"ok": True})
-            return
-        if path == "/api/providers":
-            self._send_json({"providers": NATIVE_RUNTIME.provider_manager.list()})
-            return
-        if path == "/api/models":
-            self._send_json({"models": NATIVE_RUNTIME.catalog.list()})
-            return
+            self._send_json({"state": "busy" if jarvis._voice_session_active.is_set() else "standby", "tts": "speaking" if TTS_ACTIVE.is_set() else "idle", "engine": jarvis.get_current_engine(), "settings": settings_payload(), "time": time.time(), "native": NATIVE_RUNTIME.status()}); return
+        if path == "/health": self._send_json({"ok": True}); return
+        if path == "/api/providers": self._send_json({"providers": NATIVE_RUNTIME.provider_manager.list()}); return
+        if path == "/api/models": self._send_json({"models": NATIVE_RUNTIME.catalog.list()}); return
         if path == "/api/doctor":
             from airvis.doctor import run_checks, summarize
-            self._send_json(summarize(run_checks(ENGINE)))
-            return
-        if path == "/api/backends":
-            self._send_json({"backends": ENGINE.backends.list()})
-            return
-        if path == "/api/health":
-            self._send_json(run_blocking(ENGINE.health_check()))
-            return
-        if path == "/api/workflows":
-            self._send_json({"workflows": ENGINE.store.list_workflows()})
-            return
-        if path == "/api/events":
-            self._send_json({"events": ENGINE.event_bus.history(limit=200)})
-            return
-        if path == "/api/config":
-            self._send_json({"config": ENGINE.config.to_dict()})
-            return
-        if path == "/api/costs":
-            self._send_json({"total": NATIVE_RUNTIME.costs.total})
-            return
-        if path == "/api/tools":
-            self._send_json({"tools": NATIVE_RUNTIME.tools.list()})
-            return
-        if path == "/api/memory":
-            self._send_json({"memory": NATIVE_RUNTIME.memory.list()})
-            return
-        if path == "/api/sessions":
-            self._send_json({"sessions": NATIVE_RUNTIME.sessions.list()})
-            return
-        if path == "/api/agents/status":
-            self._send_json({"status": NATIVE_RUNTIME.status(), "agents": NATIVE_RUNTIME.agents.list()})
-            return
-        if path == "/api/tasks/cancel":
-            NATIVE_RUNTIME.cancel()
-            self._send_json({"cancelled": True, "status": NATIVE_RUNTIME.status()})
-            return
-        if path == "/api/tasks":
-            self._send_json({"tasks": NATIVE_RUNTIME.task_list()})
-            return
-        if path == "/api/scheduler":
-            self._send_json({"jobs": NATIVE_RUNTIME.scheduled_jobs()})
-            return
-        if path == "/api/agents":
-            self._send_json({"agents": NATIVE_RUNTIME.agents.list()})
-            return
-        if path == "/api/plugins":
-            self._send_json({"plugins": NATIVE_RUNTIME.plugins.list()})
-            return
-        if path == "/api/engine":
-            self._send_json({"engine": jarvis.get_current_engine()})
-            return
-        if path == "/api/settings":
-            self._send_json({"settings": settings_payload()})
-            return
-        file_path = WEB_DIR / ("index.html" if path == "/" else path.removeprefix("/"))
-        if not file_path.is_file() or WEB_DIR not in file_path.parents:
-            self.send_error(HTTPStatus.NOT_FOUND)
-            return
-        content_type = "text/html; charset=utf-8" if file_path.suffix == ".html" else "text/css; charset=utf-8" if file_path.suffix == ".css" else "application/javascript; charset=utf-8"
-        body = file_path.read_bytes()
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+            self._send_json(summarize(run_checks(ENGINE))); return
+        if path == "/api/backends": self._send_json({"backends": ENGINE.backends.list()}); return
+        if path == "/api/health": self._send_json(run_blocking(ENGINE.health_check())); return
+        if path == "/api/workflows": self._send_json({"workflows": ENGINE.store.list_workflows()}); return
+        if path == "/api/events": self._send_json({"events": ENGINE.event_bus.history(limit=200)}); return
+        if path == "/api/config": self._send_json({"config": ENGINE.config.to_dict()}); return
+        if path == "/api/costs": self._send_json({"total": NATIVE_RUNTIME.costs.total}); return
+        if path == "/api/tools": self._send_json({"tools": NATIVE_RUNTIME.tools.list()}); return
+        if path == "/api/memory": self._send_json({"memory": NATIVE_RUNTIME.memory.list()}); return
+        if path == "/api/sessions": self._send_json({"sessions": NATIVE_RUNTIME.sessions.list()}); return
+        if path == "/api/agents/status": self._send_json({"status": NATIVE_RUNTIME.status(), "agents": NATIVE_RUNTIME.agents.list()}); return
+        if path == "/":
+            index = WEB_DIR / "index.html"
+            if index.is_file():
+                body = index.read_bytes(); self.send_response(HTTPStatus.OK); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
-        if not self._authorized():
-            self._send_json({"error": "authentication required"}, HTTPStatus.UNAUTHORIZED)
+        if not self._authorized(): self._send_json({"error": "authentication required"}, HTTPStatus.UNAUTHORIZED); return
+        path = urlparse(self.path).path
+        try: payload = self._read_json()
+        except (ValueError, json.JSONDecodeError): self._send_json({"error": "invalid JSON"}, HTTPStatus.BAD_REQUEST); return
+        if path == "/api/chat":
+            message = str(payload.get("message", "")).strip()
+            if not message: self._send_json({"error": "message is required"}, HTTPStatus.BAD_REQUEST); return
+            try:
+                with COMMAND_LOCK: result = NATIVE_RUNTIME.run(message)
+                if result: _speak_async(result)
+                self._send_json({"ok": True, "text": result})
+            except (ApprovalRequiredError, PermissionDeniedError) as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.FORBIDDEN)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
-        try:
-            payload = self._read_json()
-            if self.path == "/api/command":
-                command = str(payload.get("command", "")).strip()
-                if not command:
-                    raise ValueError("command is required")
-                with COMMAND_LOCK:
-                    response = jarvis.handle_command(command)
-                if payload.get("speak", False):
-                    _speak_async(response)
-                self._send_json({"response": response})
-                return
-            if self.path in {"/api/chat", "/api/agent/run"}:
-                command = str(payload.get("message", payload.get("command", ""))).strip()
-                if not command:
-                    raise ValueError("message is required")
-                self._send_json({"response": NATIVE_RUNTIME.run(command), "status": NATIVE_RUNTIME.status()})
-                return
-            if self.path == "/api/tasks":
-                prompt = str(payload.get("prompt", "")).strip()
-                if not prompt:
-                    raise ValueError("prompt is required")
-                task = NATIVE_RUNTIME.create_task(prompt)
-                if payload.get("run", False):
-                    response = NATIVE_RUNTIME.run_task(task.id)
-                    self._send_json({"task": task.id, "response": response, "status": NATIVE_RUNTIME.status()})
-                else:
-                    self._send_json({"task": task.id, "tasks": NATIVE_RUNTIME.task_list()})
-                return
-            if self.path == "/api/scheduler":
-                prompt = str(payload.get("prompt", "")).strip()
-                delay = float(payload.get("delay_seconds", 0))
-                if not prompt or delay < 0:
-                    raise ValueError("prompt and a non-negative delay_seconds are required")
-                self._send_json({"job": NATIVE_RUNTIME.schedule_once(prompt, delay)})
-                return
-            if self.path == "/api/scheduler/cancel":
-                self._send_json({"cancelled": NATIVE_RUNTIME.cancel_job(str(payload.get("job", "")))})
-                return
-            if self.path == "/api/agents/delegate":
-                role = str(payload.get("role", "")).strip()
-                prompt = str(payload.get("prompt", "")).strip()
-                if not role or not prompt:
-                    raise ValueError("role and prompt are required")
-                self._send_json({"response": NATIVE_RUNTIME.agents.delegate(role, prompt, NATIVE_RUNTIME)})
-                return
-            if self.path == "/api/tools/execute":
-                result = NATIVE_RUNTIME.execute_tool(str(payload.get("name", "")), payload.get("arguments", {}), bool(payload.get("confirm", False)))
-                self._send_json({"result": result, "status": NATIVE_RUNTIME.status()})
-                return
-            if self.path == "/api/memory":
-                content = str(payload.get("content", "")).strip()
-                if not content:
-                    raise ValueError("content is required")
-                self._send_json({"id": NATIVE_RUNTIME.memory.add(content)})
-                return
-            if self.path == "/api/speak":
-                text = str(payload.get("text", "")).strip()
-                if not text:
-                    raise ValueError("text is required")
-                _speak_async(text)
-                self._send_json({"ok": True})
-                return
-            if self.path == "/api/engine":
-                engine = str(payload.get("engine", "")).strip()
-                if engine not in {"openclaw", "hermes", "grokbot"}:
-                    raise ValueError("engine must be openclaw, hermes, or grokbot")
-                response = jarvis.handle_engine_command(f"{engine} 엔진으로 전환")
-                self._send_json({"engine": jarvis.get_current_engine(), "response": response})
-                return
-            if self.path == "/api/settings":
-                self._send_json({"settings": update_settings(payload)}, HTTPStatus.OK)
-                return
-            if self.path == "/api/workflows":
-                request = str(payload.get("request", payload.get("message", ""))).strip()
-                if not request:
-                    raise ValueError("request is required")
-                result = run_blocking(ENGINE.run(request, strategy=payload.get("strategy")))
-                self._send_json(result.to_dict())
-                return
-            if self.path == "/api/workflows/cancel":
-                workflow = str(payload.get("workflow", "")).strip()
-                if not workflow:
-                    raise ValueError("workflow is required")
-                self._send_json({"cancelled": ENGINE.cancel(workflow)})
-                return
-            if self.path == "/api/workflows/resume":
-                workflow = str(payload.get("workflow", "")).strip()
-                if not workflow:
-                    raise ValueError("workflow is required")
-                self._send_json(run_blocking(ENGINE.resume(workflow)).to_dict())
-                return
-            if self.path == "/api/plan":
-                request = str(payload.get("request", "")).strip()
-                if not request:
-                    raise ValueError("request is required")
-                self._send_json(run_blocking(ENGINE.planner.plan(request)).to_dict())
-                return
-            self.send_error(HTTPStatus.NOT_FOUND)
-        except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-        except (ApprovalRequiredError, PermissionDeniedError, PermissionError) as exc:
-            self._send_json({"error": str(exc), "confirmation_required": True}, HTTPStatus.CONFLICT)
-        except Exception as exc:
-            self._send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+        if path == "/api/settings":
+            try: self._send_json({"ok": True, "settings": update_settings(payload)})
+            except ValueError as exc: self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        self.send_error(HTTPStatus.NOT_FOUND)
 
 
 def main() -> None:
-    server = ThreadingHTTPServer((HOST, PORT), AirvisHandler)
-    print(f"AIRVIS control room: http://{HOST}:{PORT}")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nAIRVIS server stopped.")
-    finally:
-        server.server_close()
+    ThreadingHTTPServer((HOST, PORT), AirvisHandler).serve_forever()
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
