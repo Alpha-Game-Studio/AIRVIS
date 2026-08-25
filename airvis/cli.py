@@ -25,37 +25,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="always emit JSON")
     parser.add_argument("--approve", action="store_true", help="auto-approve high-risk tool calls")
     sub = parser.add_subparsers(dest="command", required=True)
-    for command, help_text in (("status", "engine status"), ("health", "live provider/backend health check"), ("doctor", "diagnose the installation"), ("version", "print the AIRVIS version")):
-        sub.add_parser(command, help=help_text)
+    sub.add_parser("status", help="engine status")
+    sub.add_parser("health", help="live provider/backend health check")
+    sub.add_parser("doctor", help="diagnose the installation")
+    sub.add_parser("version", help="print the AIRVIS version")
     providers = sub.add_parser("providers", help="inspect providers")
     providers.add_argument("action", nargs="?", choices=("list", "test", "health"), default="list")
     backends = sub.add_parser("backends", help="inspect backends")
     backends.add_argument("action", nargs="?", choices=("list", "health"), default="list")
     agents = sub.add_parser("agents", help="inspect agents")
     agents.add_argument("action", nargs="?", choices=("list", "show", "route"), default="list")
-    agents.add_argument("target", nargs="?")
+    agents.add_argument("target", nargs="?", help="agent id, or a task description for 'route'")
     tools = sub.add_parser("tools", help="inspect tools")
     tools.add_argument("action", nargs="?", choices=("list", "show"), default="list")
     tools.add_argument("name", nargs="?")
     models = sub.add_parser("models", help="list models")
     models.add_argument("--local", action="store_true")
-    plugins = sub.add_parser("plugins", help="inspect installed plugins")
-    plugins.add_argument("action", nargs="?", choices=("list",), default="list")
-    skills = sub.add_parser("skills", help="inspect installed skills")
-    skills.add_argument("action", nargs="?", choices=("list", "create", "enable", "disable"), default="list")
-    skills.add_argument("name", nargs="?")
-    # Keep the existing workflow/task/tool/memory/plugin/server command surface.
     workflow = sub.add_parser("workflow", help="run and inspect workflows")
     workflow.add_argument("action", choices=("run", "status", "cancel", "list", "resume", "events"))
-    workflow.add_argument("target", nargs="?")
-    workflow.add_argument("--strategy")
-    workflow.add_argument("--approve", action="store_true", default=argparse.SUPPRESS)
+    workflow.add_argument("target", nargs="?", help="request text (run) or workflow id")
+    workflow.add_argument("--strategy", help="cheap | balanced | fast | quality | local_only | premium")
+    workflow.add_argument("--approve", action="store_true", default=argparse.SUPPRESS, help="auto-approve high-risk tool calls")
     task = sub.add_parser("task", help="inspect a task")
     task.add_argument("action", nargs="?", choices=("inspect", "list", "run", "cancel"), default="list")
     task.add_argument("id", nargs="?")
     plan = sub.add_parser("plan", help="show the plan for a request without executing it")
     plan.add_argument("request")
-    chat = sub.add_parser("chat", help="run a request through the pipeline")
+    chat = sub.add_parser("chat", help="run a request through the native orchestration pipeline")
     chat.add_argument("message")
     chat.add_argument("--approve", action="store_true", default=argparse.SUPPRESS)
     agent = sub.add_parser("agent", help="alias of 'chat'")
@@ -68,11 +64,22 @@ def build_parser() -> argparse.ArgumentParser:
     memory = sub.add_parser("memory")
     memory.add_argument("action", nargs="?", choices=("list", "add", "delete"), default="list")
     memory.add_argument("value", nargs="?")
+    plugins = sub.add_parser("plugins")
+    plugins.add_argument("action", nargs="?", choices=("list",), default="list")
     plugin = sub.add_parser("plugin")
     plugin.add_argument("action", choices=("create", "remove", "enable", "disable"))
     plugin.add_argument("name")
-    for command in ("tasks", "logs", "costs", "schedule", "config", "start", "stop", "restart", "server"):
-        sub.add_parser(command)
+    tasks = sub.add_parser("tasks", help="legacy task list")
+    tasks.add_argument("action", nargs="?", choices=("list", "run", "cancel"), default="list")
+    tasks.add_argument("id", nargs="?")
+    sub.add_parser("logs")
+    sub.add_parser("costs")
+    sub.add_parser("schedule")
+    sub.add_parser("config", help="show the resolved configuration")
+    sub.add_parser("start")
+    sub.add_parser("stop")
+    sub.add_parser("restart")
+    sub.add_parser("server")
     return parser
 
 
@@ -94,30 +101,26 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "config":
         _emit(config.to_dict())
         return 0
-    if args.command == "skills":
-        from .skills import SkillRegistry
-        registry = SkillRegistry()
-        if args.action == "create":
-            if not args.name:
-                print("skill name is required", file=sys.stderr); return 2
-            print(registry.create(args.name)); return 0
-        if args.action in {"enable", "disable"}:
-            if not args.name:
-                print("skill name is required", file=sys.stderr); return 2
-            print("updated" if registry.enable(args.name, args.action == "enable") else "not found"); return 0
-        _emit(registry.list()); return 0
     from .security.permissions import always_approve
     approve = bool(getattr(args, "approve", False))
     engine = AirvisEngine(config, workspace=args.workspace, approval_handler=always_approve if approve else None)
-    handlers = {"status": _status, "health": _health, "doctor": _doctor, "providers": _providers, "backends": _backends, "agents": _agents, "tools": _tools, "models": _models, "workflow": _workflow, "task": _task, "plan": _plan, "chat": _chat, "agent": _chat, "tool": _tool, "memory": _memory, "plugins": _plugins, "plugin": _plugin, "tasks": _legacy_tasks, "logs": _logs, "costs": _costs, "schedule": _schedule}
+    handlers = {
+        "status": _status, "health": _health, "doctor": _doctor, "providers": _providers,
+        "backends": _backends, "agents": _agents, "tools": _tools, "models": _models,
+        "workflow": _workflow, "task": _task, "plan": _plan, "chat": _chat, "agent": _chat,
+        "tool": _tool, "memory": _memory, "plugins": _plugins, "plugin": _plugin,
+        "tasks": _legacy_tasks, "logs": _logs, "costs": _costs, "schedule": _schedule,
+    }
     handler = handlers.get(args.command)
     if handler is None:
-        print(f"unknown command: {args.command}", file=sys.stderr); return 2
+        print(f"unknown command: {args.command}", file=sys.stderr)
+        return 2
     return handler(engine, args)
 
 
 def _status(engine: Any, args: Any) -> int:
-    _emit(engine.describe()); return 0
+    _emit(engine.describe())
+    return 0
 
 
 def _health(engine: Any, args: Any) -> int:
@@ -130,7 +133,9 @@ def _health(engine: Any, args: Any) -> int:
 
 def _doctor(engine: Any, args: Any) -> int:
     from .doctor import run_checks, summarize
-    report = summarize(run_checks(engine)); _emit(report); return 0 if report["ok"] else 1
+    report = summarize(run_checks(engine))
+    _emit(report)
+    return 0 if report["ok"] else 1
 
 
 def _providers(engine: Any, args: Any) -> int:
@@ -140,12 +145,16 @@ def _providers(engine: Any, args: Any) -> int:
         try:
             result = run_blocking(engine.providers.generate(GenerationRequest(messages=[Message("user", "Reply with OK")])) )
         except Exception as exc:
-            print(f"provider test failed: {exc}", file=sys.stderr); return 1
-        _emit({"provider": result.provider, "model": result.model, "text": result.text}); return 0
+            print(f"provider test failed: {exc}", file=sys.stderr)
+            return 1
+        _emit({"provider": result.provider, "model": result.model, "text": result.text})
+        return 0
     if args.action == "health":
         from .core.asyncutil import run_blocking
-        _emit(run_blocking(engine.providers.health_check_all())); return 0
-    _emit(engine.providers.list()); return 0
+        _emit(run_blocking(engine.providers.health_check_all()))
+        return 0
+    _emit(engine.providers.list())
+    return 0
 
 
 def _backends(engine: Any, args: Any) -> int:
@@ -212,7 +221,15 @@ def _task(engine: Any, args: Any) -> int:
 
 def _chat(engine: Any, args: Any) -> int:
     from .core.asyncutil import run_blocking
-    result = run_blocking(engine.run(args.message)); print(result.output); return 0 if result.ok else 1
+    # MockProvider is a test fixture. A production AIRVIS installation must
+    # never silently present its canned response as an LLM answer.
+    real_providers = [provider for provider in engine.providers.names() if provider != "mock"]
+    if not real_providers:
+        print("AIRVIS is not configured with a real AI provider. Run `airvis setup` and configure OpenRouter/OpenAI/Anthropic/Gemini/xAI first.", file=sys.stderr)
+        return 2
+    result = run_blocking(engine.run(args.message))
+    print(result.output)
+    return 0 if result.ok else 1
 
 
 def _tool(engine: Any, args: Any) -> int:
