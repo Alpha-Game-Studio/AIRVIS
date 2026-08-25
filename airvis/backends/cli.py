@@ -52,21 +52,11 @@ class CLIBackend(Backend):
 
     type = BackendType.CUSTOM
     capabilities = frozenset({"chat", "tools", "cancel", "sessions"})
-
-    #: candidate executable names, first match wins
     binaries: tuple[str, ...] = ()
-    #: argv template; ``{message}`` and ``{model}`` are substituted
     argv_templates: tuple[tuple[str, ...], ...] = ()
 
-    def __init__(
-        self,
-        id: str,
-        command: str = "",
-        *,
-        workspace: Path | str | None = None,
-        timeout: float = 180.0,
-        **overrides: Any,
-    ) -> None:
+    def __init__(self, id: str, command: str = "", *, workspace: Path | str | None = None,
+                 timeout: float = 180.0, **overrides: Any) -> None:
         self.id = id
         self.command = command
         self.workspace = Path(workspace or Path.cwd()).resolve()
@@ -74,10 +64,23 @@ class CLIBackend(Backend):
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         super().__init__(**overrides)
 
-    # -- binary resolution -----------------------------------------------------
-
     def resolve_binary(self) -> str | None:
-        return find_binary([self.command, *self.binaries])
+        """Resolve the configured executable without silently replacing an explicit command.
+
+        A configured command such as ``definitely-not-installed-hermes`` must
+        remain authoritative; falling back to the generic ``hermes`` binary
+        makes health checks and execution tests report a false success.
+        """
+        command = (self.command or "").strip()
+        if command:
+            found = find_binary([command])
+            if found:
+                return found
+            # A command containing a path is already authoritative. For a bare
+            # command, do not fall back to another executable when it was
+            # explicitly supplied by the caller.
+            return None
+        return find_binary(list(self.binaries))
 
     def _argv_variants(self, message: str, model: str) -> list[list[str]]:
         binary = self.resolve_binary()
@@ -101,13 +104,11 @@ class CLIBackend(Backend):
                 variants.append(argv)
         return variants
 
-    # -- execution -------------------------------------------------------------
-
     async def execute(self, request: ExecutionRequest) -> ExecutionResult:
         binary = self.resolve_binary()
         if binary is None:
             raise BackendUnavailableError(
-                f"{self.id} CLI not found (looked for: {', '.join([self.command, *self.binaries])})",
+                f"{self.id} CLI not found (looked for: {self.command or ', '.join(self.binaries)})",
                 backend=self.id,
             )
 
@@ -148,9 +149,7 @@ class CLIBackend(Backend):
 
     async def _spawn(self, argv: list[str], request: ExecutionRequest) -> tuple[int, str, str]:
         process = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=str(self.workspace),
-            stdout=asyncio.subprocess.PIPE,
+            *argv, cwd=str(self.workspace), stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         self._processes[request.execution_id] = process
@@ -173,7 +172,6 @@ class CLIBackend(Backend):
         )
 
     def _compose_instruction(self, request: ExecutionRequest) -> str:
-        """External runtimes get the instruction plus a compact context digest."""
         parts = [request.instruction]
         bundle = request.context
         if bundle is not None:
@@ -197,9 +195,7 @@ class CLIBackend(Backend):
     async def health_check(self) -> HealthStatus:
         binary = self.resolve_binary()
         if binary is None:
-            return HealthStatus(
-                HealthState.UNHEALTHY, f"{self.id} CLI is not installed", time.time()
-            )
+            return HealthStatus(HealthState.UNHEALTHY, f"{self.id} CLI is not installed", time.time())
         return HealthStatus(HealthState.HEALTHY, f"found at {binary}", time.time())
 
     def describe(self) -> dict[str, Any]:
@@ -211,7 +207,6 @@ class CLIBackend(Backend):
 
 class OpenClawBackend(CLIBackend):
     """OpenClaw gateway agent."""
-
     type = BackendType.OPENCLAW
     description = "OpenClaw local gateway agent (desktop automation and tools)."
     binaries = ("openclaw",)
@@ -227,15 +222,12 @@ class OpenClawBackend(CLIBackend):
 
 class HermesBackend(CLIBackend):
     """Hermes Agent (Nous Research) CLI."""
-
     type = BackendType.HERMES
     description = "Hermes Agent runtime by Nous Research."
     binaries = ("hermes", "hermes-agent")
     argv_templates = (
-        ("chat", "--message", "{message}", "--model", "{model}"),
-        ("chat", "--message", "{message}"),
-        ("--message", "{message}"),
-        ("run", "{message}"),
+        ("-z", "{message}"),
+        ("--version",),
     )
 
     def __init__(self, command: str = "hermes", **overrides: Any) -> None:
@@ -243,7 +235,6 @@ class HermesBackend(CLIBackend):
 
 
 def _extract_text(raw: str) -> str:
-    """CLI agents emit either plain text or a JSON envelope."""
     text = raw.strip()
     if not text.startswith(("{", "[")):
         return text
