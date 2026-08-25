@@ -11,7 +11,6 @@ from __future__ import annotations
 import getpass
 import json
 import os
-import shutil
 import stat
 import sys
 import termios
@@ -25,8 +24,6 @@ WORKSPACE_CONFIG = Path.cwd() / "airvis.json"
 PLUGIN_DIR = Path.home() / ".airvis" / "plugins"
 SKILL_DIR = Path.home() / ".airvis" / "skills"
 
-# Mock is deliberately not exposed here. It is a test provider, not a user
-# runtime option. AIRVIS should never silently pretend a real model answered.
 PROVIDERS = ("openrouter", "openai", "anthropic", "gemini", "xai", "ollama")
 MODELS: dict[str, tuple[str, ...]] = {
     "openrouter": (
@@ -43,16 +40,11 @@ CHANNELS = ("voice", "telegram", "discord", "slack", "web", "imessage", "cli")
 STRATEGIES = ("balanced", "quality", "fast", "cheap", "premium", "local_only")
 STT_PROVIDERS = ("openai", "system", "none")
 TTS_PROVIDERS = ("elevenlabs", "system", "none")
-
 SECRET_ENV = {
-    "openrouter": "OPENROUTER_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "gemini": "GEMINI_API_KEY",
-    "xai": "XAI_API_KEY",
-    "elevenlabs": "ELEVENLABS_API_KEY",
-    "telegram": "TELEGRAM_BOT_TOKEN",
-    "discord": "DISCORD_BOT_TOKEN",
+    "openrouter": "OPENROUTER_API_KEY", "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY",
+    "xai": "XAI_API_KEY", "elevenlabs": "ELEVENLABS_API_KEY",
+    "telegram": "TELEGRAM_BOT_TOKEN", "discord": "DISCORD_BOT_TOKEN",
     "slack": "SLACK_BOT_TOKEN",
 }
 
@@ -98,7 +90,7 @@ def _ask(prompt: str, default: str = "", *, secret: bool = False) -> str:
 
 def _read_key() -> str:
     if not sys.stdin.isatty():
-        return ""
+        return _ask("API key")
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:
@@ -125,24 +117,16 @@ def _read_key() -> str:
 
 
 def _choose(title: str, options: tuple[str, ...], default: str) -> str:
-    """Arrow-key selector. Non-TTY test runners get a deterministic fallback."""
     if not options:
         raise ValueError("no options")
     index = options.index(default) if default in options else 0
     print(f"\n◆ {title}")
     if not sys.stdin.isatty():
-        raw = _ask("Select", str(index + 1))
-        try:
-            chosen = int(raw) - 1
-            return options[chosen] if 0 <= chosen < len(options) else options[index]
-        except ValueError:
-            return raw if raw in options else options[index]
+        return options[index]
     print("  ↑/↓ 이동   Enter 선택")
     while True:
         for i, option in enumerate(options):
-            marker = "❯" if i == index else " "
-            print(f"\r  {marker} {option}")
-        # redraw the menu cleanly on the next iteration
+            print(f"  {'❯' if i == index else ' '} {option}")
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
         try:
@@ -159,27 +143,22 @@ def _choose(title: str, options: tuple[str, ...], default: str) -> str:
                 raise KeyboardInterrupt
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        # Clear the printed menu before drawing again.
-        sys.stdout.write("\033[{}A".format(len(options)))
+        sys.stdout.write(f"\033[{len(options)}A")
         sys.stdout.flush()
 
 
 def _multi(title: str, options: tuple[str, ...], defaults: list[str]) -> list[str]:
-    """Space toggles, arrows move, Enter confirms."""
     selected = {item for item in defaults if item in options}
     if not selected and options:
         selected.add(options[0])
     index = 0
     print(f"\n◆ {title}")
     if not sys.stdin.isatty():
-        raw = _ask("Select comma-separated names", ",".join(selected))
-        return [x.strip() for x in raw.split(",") if x.strip() in options]
+        return [option for option in options if option in selected]
     print("  ↑/↓ 이동   Space 선택   Enter 완료")
     while True:
         for i, option in enumerate(options):
-            cursor = "❯" if i == index else " "
-            mark = "●" if option in selected else "○"
-            print(f"  {cursor} {mark} {option}")
+            print(f"  {'❯' if i == index else ' '} {'●' if option in selected else '○'} {option}")
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
         try:
@@ -201,7 +180,7 @@ def _multi(title: str, options: tuple[str, ...], defaults: list[str]) -> list[st
                 raise KeyboardInterrupt
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        sys.stdout.write("\033[{}A".format(len(options)))
+        sys.stdout.write(f"\033[{len(options)}A")
         sys.stdout.flush()
 
 
@@ -210,13 +189,18 @@ def _secret_for(provider: str, credentials: dict[str, str]) -> None:
     if not env_name or os.environ.get(env_name) or credentials.get(env_name):
         return
     print(f"\n{provider} API key가 필요합니다. 입력 내용은 화면에 표시되지 않습니다.")
-    if sys.stdin.isatty():
-        key = _read_key()
-        print("  저장했습니다." if key else "  건너뜁니다.")
-    else:
-        key = _ask(f"{env_name}")
+    key = _read_key()
     if key:
         credentials[env_name] = key
+        print("  저장했습니다.")
+    else:
+        print("  건너뜁니다.")
+
+
+def _installed_names(directory: Path) -> list[str]:
+    if not directory.is_dir():
+        return []
+    return sorted(path.name for path in directory.iterdir() if path.is_dir())
 
 
 def run() -> int:
@@ -257,8 +241,10 @@ def run() -> int:
     review = _ask("자동 Review 사용? (y/n)", "y").lower() in {"y", "yes"}
     auto_repair = _ask("자동 Repair 사용? (y/n)", "y").lower() in {"y", "yes"}
 
+    PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
+    SKILL_DIR.mkdir(parents=True, exist_ok=True)
     setup_data = {
-        "version": 4,
+        "version": 5,
         "runtime": "native",
         "provider": default_provider,
         "providers": providers,
@@ -268,13 +254,10 @@ def run() -> int:
         "channels": channels,
         "voice": {"enabled": voice_enabled, "stt_provider": stt, "tts_provider": tts, "voice_id": voice_id, "language": language},
         "orchestrator": {"strategy": strategy, "backend": "native", "max_concurrency": max_concurrency, "review": review, "auto_repair": auto_repair},
-        "plugins": "discovered from ~/.airvis/plugins",
-        "skills": "discovered from ~/.airvis/skills",
+        "plugins": _installed_names(PLUGIN_DIR),
+        "skills": _installed_names(SKILL_DIR),
     }
-
     SETUP_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
-    SKILL_DIR.mkdir(parents=True, exist_ok=True)
     SETUP_PATH.write_text(json.dumps(setup_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     _write_credentials(credentials)
 
