@@ -1,8 +1,4 @@
-"""Composition root.
-
-:class:`AirvisEngine` wires the registries, routers and pipeline stages
- together from a single :class:`~airvis.core.config.AirvisConfig`.
-"""
+"""Composition root for the AIRVIS orchestration engine."""
 
 from __future__ import annotations
 
@@ -19,7 +15,7 @@ from .backends.registry import BackendRegistry
 from .context.manager import ContextManager
 from .core.asyncutil import run_blocking
 from .core.config import AirvisConfig
-from .core.events import EventBus, EventType
+from .core.events import EventBus
 from .core.health import HealthRegistry
 from .orchestration.dag import DAGEngine
 from .orchestration.orchestrator import Orchestrator
@@ -39,35 +35,21 @@ log = logging.getLogger("airvis.engine")
 
 
 class AirvisEngine:
-    """The assembled AIRVIS autonomous agent engine.
+    """Native AIRVIS orchestration engine."""
 
-    AIRVIS is an orchestration engine first: providers, backends, tools,
-    plugins, skills and channels are replaceable resources around the planner,
-    router, DAG executor, review and repair loop.
-    """
-
-    def __init__(
-        self,
-        config: AirvisConfig | None = None,
-        *,
-        workspace: Path | str | None = None,
-        environ: dict[str, str] | None = None,
-        approval_handler: Any = None,
-        state_path: Path | str | None = None,
-        memory_path: Path | str | None = None,
-        artifact_root: Path | str | None = None,
-        register_default_agents: bool = True,
-        use_llm_planner: bool = True,
-    ) -> None:
+    def __init__(self, config: AirvisConfig | None = None, *, workspace: Path | str | None = None,
+                 environ: dict[str, str] | None = None, approval_handler: Any = None,
+                 state_path: Path | str | None = None, memory_path: Path | str | None = None,
+                 artifact_root: Path | str | None = None, register_default_agents: bool = True,
+                 use_llm_planner: bool = True) -> None:
         if config is not None:
             self.config = config
         else:
-            search_root = Path(workspace).resolve() if workspace is not None else Path.cwd()
-            self.config = AirvisConfig.load(environ=environ, search_from=search_root)
+            root = Path(workspace).resolve() if workspace is not None else Path.cwd()
+            self.config = AirvisConfig.load(environ=environ, search_from=root)
         if workspace is not None:
             self.config.workspace = str(Path(workspace).resolve())
         self.workspace = Path(self.config.workspace).resolve()
-
         self.event_bus = EventBus()
         self.health = HealthRegistry()
         self.store = StateStore(
@@ -76,62 +58,43 @@ class AirvisEngine:
         )
         self.memory = MemoryStore(memory_path)
         self.artifacts = ArtifactManager(artifact_root, event_bus=self.event_bus)
-        self.permissions = PermissionManager(
-            self.config.security, self.workspace, event_bus=self.event_bus,
-            approval_handler=approval_handler,
-        )
+        self.permissions = PermissionManager(self.config.security, self.workspace,
+                                             event_bus=self.event_bus, approval_handler=approval_handler)
         self.tools = ToolRegistry(self.workspace, permissions=self.permissions, event_bus=self.event_bus)
-
         self.providers: ProviderRegistry = build_provider_registry(
-            self.config, environ=environ, health=self.health, event_bus=self.event_bus
-        )
-
-        # Extensions are real runtime participants. Plugins can register tools
-        # through the same ToolRegistry/security pipeline; skills contribute
-        # declarative instructions to orchestration context.
+            self.config, environ=environ, health=self.health, event_bus=self.event_bus)
         self.plugins = PluginManager()
         self.plugin_load_results = self.plugins.load_enabled(
-            tools=self.tools, providers=self.providers, event_bus=self.event_bus
-        )
+            tools=self.tools, providers=self.providers, event_bus=self.event_bus)
         self.skills = SkillRegistry()
-
         self.backends: BackendRegistry = build_backend_registry(
-            self.config, self.providers, self.tools,
-            workspace=self.workspace, health=self.health, event_bus=self.event_bus,
-        )
-        self.agents = AgentRegistry(
-            backends=self.backends, providers=self.providers, tools=self.tools, health=self.health
-        )
+            self.config, self.providers, self.tools, workspace=self.workspace,
+            health=self.health, event_bus=self.event_bus)
+        self.agents = AgentRegistry(backends=self.backends, providers=self.providers,
+                                    tools=self.tools, health=self.health)
         if register_default_agents:
-            self.agents.register_all(default_agents(
-                providers=self.providers, backends=self.backends, tools=self.tools,
-                config=self.config.agents,
-            ))
-
-        self.router = AgentRouter(
-            self.agents, config=self.config.routing, providers=self.providers,
-            backends=self.backends, tools=self.tools, health=self.health, event_bus=self.event_bus,
-        )
-        self.context = ContextManager(
-            self.config.context, artifacts=self.artifacts, workspace=self.workspace, memory=self.memory
-        )
+            self.agents.register_all(default_agents(providers=self.providers, backends=self.backends,
+                                                    tools=self.tools, config=self.config.agents))
+        self.router = AgentRouter(self.agents, config=self.config.routing, providers=self.providers,
+                                  backends=self.backends, tools=self.tools, health=self.health,
+                                  event_bus=self.event_bus)
+        self.context = ContextManager(self.config.context, artifacts=self.artifacts,
+                                      workspace=self.workspace, memory=self.memory)
         self.planner: Planner = (
             LLMPlanner(self.providers, tools=self.tools, agents_config=self.config.agents,
                        workflow_config=self.config.workflow)
             if use_llm_planner else Planner(agents_config=self.config.agents, workflow_config=self.config.workflow)
         )
         self.dag = DAGEngine(config=self.config.workflow, event_bus=self.event_bus, store=self.store)
-        self.review = ReviewSystem(
-            self.config.review, providers=self.providers, artifacts=self.artifacts, event_bus=self.event_bus
-        )
+        self.review = ReviewSystem(self.config.review, providers=self.providers,
+                                   artifacts=self.artifacts, event_bus=self.event_bus)
         self.orchestrator = Orchestrator(
             config=self.config, agents=self.agents, router=self.router, backends=self.backends,
             providers=self.providers, tools=self.tools, permissions=self.permissions,
             planner=self.planner, dag=self.dag, review=self.review, context=self.context,
             artifacts=self.artifacts, event_bus=self.event_bus, health=self.health, store=self.store,
             analyzer=ErrorAnalyzer(), repair_planner=RepairPlanner(self.config.repair),
-            approval_handler=approval_handler,
-        )
+            approval_handler=approval_handler)
         if self.store.enabled:
             self.event_bus.subscribe(self._persist_event)
         if self.config.mcp.enabled:
@@ -150,27 +113,16 @@ class AirvisEngine:
         return self.orchestrator.cancel(workflow_id)
 
     async def health_check(self) -> dict[str, Any]:
-        return {
-            "providers": await self.providers.health_check_all(),
-            "backends": await self.backends.health_check_all(),
-        }
+        return {"providers": await self.providers.health_check_all(),
+                "backends": await self.backends.health_check_all()}
 
     def describe(self) -> dict[str, Any]:
-        return {
-            "workspace": str(self.workspace),
-            "config_source": self.config.source,
-            "routing_strategy": self.config.routing.strategy,
-            "providers": self.providers.names(),
-            "backends": self.backends.names(),
-            "agents": self.agents.names(),
-            "tools": len(self.tools),
-            "plugins": self.plugins.list(),
-            "skills": self.skills.list(),
-            "persistence": self.store.enabled,
-            "mcp": self.config.mcp.enabled,
-            "native_primary": self.backends.has("native"),
-            "planner": type(self.planner).__name__,
-        }
+        return {"workspace": str(self.workspace), "config_source": self.config.source,
+                "routing_strategy": self.config.routing.strategy, "providers": self.providers.names(),
+                "backends": self.backends.names(), "agents": self.agents.names(),
+                "tools": len(self.tools), "plugins": self.plugins.list(), "skills": self.skills.list(),
+                "persistence": self.store.enabled, "mcp": self.config.mcp.enabled,
+                "native_primary": self.backends.has("native"), "planner": type(self.planner).__name__}
 
     async def close(self) -> None:
         await self.backends.close()
@@ -184,10 +136,17 @@ class AirvisEngine:
                 log.exception("failed to persist AIRVIS event")
 
     def _install_mcp(self) -> None:
-        # MCP installation remains isolated so a missing optional MCP package
-        # cannot prevent the native engine from booting.
         try:
             from .mcp import install_mcp_servers
             install_mcp_servers(self)
         except ImportError:
             log.warning("MCP is enabled but the optional MCP runtime is unavailable")
+
+
+def build_engine(config: AirvisConfig | None = None, *, workspace: Path | str | None = None,
+                 **kwargs: Any) -> AirvisEngine:
+    """Compatibility factory used by the public AIRVIS package API."""
+    return AirvisEngine(config, workspace=workspace, **kwargs)
+
+
+__all__ = ["AirvisEngine", "build_engine"]
