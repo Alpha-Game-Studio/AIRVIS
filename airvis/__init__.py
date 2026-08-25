@@ -13,7 +13,7 @@ from .openclaw import OpenClaw, OpenClawOptions
 from .orchestration import Orchestrator, Plan, Planner, ReviewResult, Task, TaskStatus, WorkflowResult, WorkflowStatus
 from .runtime import AgentRuntime, AgentState
 
-__version__ = "8.2.0"
+__version__ = "6.0.0"
 __all__ = [
     "AgentGoal", "AgentKernel", "AgentOS", "AgentTask", "AutonomousAgent", "AutonomousLoop", "AutonomousResult", "BackgroundJob",
     "AgentRegistry", "AgentRouter", "AgentRuntime", "AgentSpec", "AgentState", "AirvisConfig", "AirvisEngine", "AirvisError",
