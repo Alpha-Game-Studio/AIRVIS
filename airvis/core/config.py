@@ -27,32 +27,13 @@ class RoutingStrategy(str, Enum):
     PREMIUM = "premium"
 
 
-#: Per-strategy scoring weights consumed by :class:`airvis.agents.router.AgentRouter`.
 STRATEGY_WEIGHTS: dict[RoutingStrategy, dict[str, float]] = {
-    RoutingStrategy.BALANCED: {
-        "capability": 4.0, "reliability": 1.0, "health": 1.5, "priority": 1.0,
-        "cost": 1.0, "latency": 0.6, "workload": 1.0, "quality": 1.0, "locality": 0.0,
-    },
-    RoutingStrategy.CHEAP: {
-        "capability": 4.0, "reliability": 0.6, "health": 1.0, "priority": 0.4,
-        "cost": 4.0, "latency": 0.2, "workload": 0.6, "quality": 0.2, "locality": 1.0,
-    },
-    RoutingStrategy.FAST: {
-        "capability": 4.0, "reliability": 0.8, "health": 1.5, "priority": 0.6,
-        "cost": 0.2, "latency": 3.5, "workload": 2.0, "quality": 0.4, "locality": 0.5,
-    },
-    RoutingStrategy.QUALITY: {
-        "capability": 4.0, "reliability": 2.0, "health": 1.5, "priority": 1.5,
-        "cost": 0.1, "latency": 0.1, "workload": 0.4, "quality": 3.5, "locality": 0.0,
-    },
-    RoutingStrategy.PREMIUM: {
-        "capability": 4.0, "reliability": 2.0, "health": 1.0, "priority": 2.0,
-        "cost": 0.0, "latency": 0.0, "workload": 0.2, "quality": 5.0, "locality": 0.0,
-    },
-    RoutingStrategy.LOCAL_ONLY: {
-        "capability": 4.0, "reliability": 1.0, "health": 1.5, "priority": 1.0,
-        "cost": 2.0, "latency": 0.5, "workload": 1.0, "quality": 0.5, "locality": 6.0,
-    },
+    RoutingStrategy.BALANCED: {"capability": 4.0, "reliability": 1.0, "health": 1.5, "priority": 1.0, "cost": 1.0, "latency": 0.6, "workload": 1.0, "quality": 1.0, "locality": 0.0},
+    RoutingStrategy.CHEAP: {"capability": 4.0, "reliability": 0.6, "health": 1.0, "priority": 0.4, "cost": 4.0, "latency": 0.2, "workload": 0.6, "quality": 0.2, "locality": 1.0},
+    RoutingStrategy.FAST: {"capability": 4.0, "reliability": 0.8, "health": 1.5, "priority": 0.6, "cost": 0.2, "latency": 3.5, "workload": 2.0, "quality": 0.4, "locality": 0.5},
+    RoutingStrategy.QUALITY: {"capability": 4.0, "reliability": 2.0, "health": 1.5, "priority": 1.5, "cost": 0.1, "latency": 0.1, "workload": 0.4, "quality": 3.5, "locality": 0.0},
+    RoutingStrategy.PREMIUM: {"capability": 4.0, "reliability": 2.0, "health": 1.0, "priority": 2.0, "cost": 0.0, "latency": 0.0, "workload": 0.2, "quality": 5.0, "locality": 0.0},
+    RoutingStrategy.LOCAL_ONLY: {"capability": 4.0, "reliability": 1.0, "health": 1.5, "priority": 1.0, "cost": 2.0, "latency": 0.5, "workload": 1.0, "quality": 0.5, "locality": 6.0},
 }
 
 
@@ -60,9 +41,7 @@ STRATEGY_WEIGHTS: dict[RoutingStrategy, dict[str, float]] = {
 class RoutingConfig:
     strategy: str = RoutingStrategy.BALANCED.value
     weights: dict[str, float] = field(default_factory=dict)
-    #: minimum score an agent must reach to be selected at all
     min_score: float = -1e9
-    #: skip agents whose health tracker reports them as unhealthy
     skip_unhealthy: bool = True
 
     def resolved_weights(self) -> dict[str, float]:
@@ -85,6 +64,7 @@ class AgentsConfig:
 @dataclass
 class ProvidersConfig:
     default: str = ""
+    model: str = ""
     fallbacks: list[str] = field(default_factory=list)
     health_check_interval: float = 30.0
     request_timeout: float = 60.0
@@ -102,19 +82,32 @@ class BackendsConfig:
 
 
 @dataclass
+class VoiceConfig:
+    enabled: bool = True
+    stt_provider: str = "openai"
+    tts_provider: str = "elevenlabs"
+    voice_id: str = ""
+    language: str = "ko-KR"
+    vad_silence_seconds: float = 0.6
+
+
+@dataclass
+class ChannelsConfig:
+    enabled: list[str] = field(default_factory=lambda: ["voice"])
+    # Credentials are deliberately represented by environment-variable names,
+    # never by plaintext secrets in airvis.json.
+    env: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class SecurityConfig:
-    #: risk level at or below which execution is approved automatically
     auto_approve_max_risk: str = "LOW"
-    #: policy applied to anything above ``auto_approve_max_risk``
-    default_high_risk_policy: str = "approval"  # approval | allow | deny
-    #: per-tool policy overrides, e.g. {"git.push": "deny"}
+    default_high_risk_policy: str = "approval"
     tool_policies: dict[str, str] = field(default_factory=dict)
-    #: per-tool risk overrides, e.g. {"terminal.execute": "CRITICAL"}
     risk_overrides: dict[str, str] = field(default_factory=dict)
     denied_tools: list[str] = field(default_factory=list)
     workspace_restricted: bool = True
     allow_network: bool = True
-    #: extra directories a tool may touch besides the workspace
     additional_writable_paths: list[str] = field(default_factory=list)
 
 
@@ -124,7 +117,6 @@ class RepairConfig:
     max_repairs_per_task: int = 4
     max_repairs_per_workflow: int = 12
     retry_backoff_seconds: float = 0.5
-    #: category -> ordered strategy names, overrides the built-in playbook
     strategies: dict[str, list[str]] = field(default_factory=dict)
     allow_human_review: bool = True
 
@@ -142,12 +134,7 @@ class WorkflowConfig:
 class ReviewConfig:
     enabled: bool = True
     min_score: float = 0.6
-    dimensions: list[str] = field(
-        default_factory=lambda: [
-            "correctness", "completeness", "security", "tests",
-            "requirements", "regressions", "code_quality",
-        ]
-    )
+    dimensions: list[str] = field(default_factory=lambda: ["correctness", "completeness", "security", "tests", "requirements", "regressions", "code_quality"])
     use_llm_reviewer: bool = False
     reviewer_capability: str = "review"
 
@@ -158,7 +145,7 @@ class ContextConfig:
     max_messages: int = 24
     max_previous_results: int = 6
     include_artifacts: bool = True
-    compression: str = "truncate"  # truncate | summarize | none
+    compression: str = "truncate"
 
 
 @dataclass
@@ -194,6 +181,8 @@ class AirvisConfig:
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     providers: ProvidersConfig = field(default_factory=ProvidersConfig)
     backends: BackendsConfig = field(default_factory=BackendsConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
+    channels: ChannelsConfig = field(default_factory=ChannelsConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     repair: RepairConfig = field(default_factory=RepairConfig)
     workflow: WorkflowConfig = field(default_factory=WorkflowConfig)
@@ -203,17 +192,8 @@ class AirvisConfig:
     state: StateConfig = field(default_factory=StateConfig)
     source: str = "defaults"
 
-    # -- construction ---------------------------------------------------------
-
     @classmethod
-    def load(
-        cls,
-        path: str | Path | None = None,
-        *,
-        environ: dict[str, str] | None = None,
-        overrides: dict[str, Any] | None = None,
-        search_from: str | Path | None = None,
-    ) -> AirvisConfig:
+    def load(cls, path: str | Path | None = None, *, environ: dict[str, str] | None = None, overrides: dict[str, Any] | None = None, search_from: str | Path | None = None) -> AirvisConfig:
         environ = dict(os.environ if environ is None else environ)
         data: dict[str, Any] = {}
         source = "defaults"
@@ -240,13 +220,12 @@ class AirvisConfig:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
-    # -- environment overrides -------------------------------------------------
-
     def apply_environment(self, environ: dict[str, str]) -> None:
         mapping: list[tuple[str, Any, str, type]] = [
             ("AIRVIS_WORKSPACE", self, "workspace", str),
             ("AIRVIS_ROUTING_STRATEGY", self.routing, "strategy", str),
             ("AIRVIS_PROVIDER", self.providers, "default", str),
+            ("AIRVIS_MODEL", self.providers, "model", str),
             ("AIRVIS_FALLBACK_PROVIDER", self.providers, "fallbacks", list),
             ("AIRVIS_PROVIDER_TIMEOUT", self.providers, "request_timeout", float),
             ("AIRVIS_MAX_CONCURRENCY", self.workflow, "max_concurrency", int),
@@ -259,6 +238,9 @@ class AirvisConfig:
             ("AIRVIS_STATE_PATH", self.state, "path", str),
             ("AIRVIS_PERSIST", self.state, "enabled", bool),
             ("AIRVIS_MCP_ENABLED", self.mcp, "enabled", bool),
+            ("AIRVIS_VOICE_STT", self.voice, "stt_provider", str),
+            ("AIRVIS_VOICE_TTS", self.voice, "tts_provider", str),
+            ("AIRVIS_VOICE_ID", self.voice, "voice_id", str),
             ("OPENCLAW_CLI", self.backends, "openclaw_command", str),
             ("HERMES_CLI", self.backends, "hermes_command", str),
         ]
@@ -267,16 +249,15 @@ class AirvisConfig:
             if raw is None or raw.strip() == "":
                 continue
             setattr(target, attribute, _coerce(raw.strip(), kind))
-        # Legacy privacy switch used by the V4 ModelRouter.
         privacy = environ.get("AIRVIS_PRIVACY_MODE", "").strip().upper()
         if privacy in {"LOCAL", "LOCAL ONLY", "LOCAL_ONLY"}:
             self.routing.strategy = RoutingStrategy.LOCAL_ONLY.value
         enabled = environ.get("AIRVIS_BACKENDS", "").strip()
         if enabled:
             self.backends.enabled = [item.strip() for item in enabled.split(",") if item.strip()]
-
-
-# --- helpers -----------------------------------------------------------------
+        channels = environ.get("AIRVIS_CHANNELS", "").strip()
+        if channels:
+            self.channels.enabled = [item.strip() for item in channels.split(",") if item.strip()]
 
 
 def _coerce(raw: str, kind: type) -> Any:
@@ -291,9 +272,7 @@ def _coerce(raw: str, kind: type) -> Any:
     return raw
 
 
-def _resolve_config_path(
-    path: str | Path | None, environ: dict[str, str], search_from: str | Path | None
-) -> Path | None:
+def _resolve_config_path(path: str | Path | None, environ: dict[str, str], search_from: str | Path | None) -> Path | None:
     if path is not None:
         candidate = Path(path).expanduser()
         if not candidate.is_file():
@@ -305,15 +284,7 @@ def _resolve_config_path(
         if not candidate.is_file():
             raise ConfigError(f"AIRVIS_CONFIG points at a missing file: {candidate}")
         return candidate
-
-    # An explicit workspace is an isolation boundary. Do not silently inherit
-    # ~/.airvis configuration from an unrelated user workspace. The home config
-    # remains available for the normal no-workspace invocation.
-    if search_from is not None:
-        roots = [Path(search_from).expanduser()]
-    else:
-        roots = [Path.cwd(), Path.home() / ".airvis"]
-
+    roots = [Path(search_from).expanduser()] if search_from is not None else [Path.cwd(), Path.home() / ".airvis"]
     for root in roots:
         for name in CONFIG_FILENAMES:
             candidate = root / name
@@ -327,10 +298,8 @@ def _read_config_file(path: Path) -> dict[str, Any]:
     if path.suffix in {".yaml", ".yml"}:
         try:
             import yaml
-        except ImportError as exc:  # pragma: no cover - depends on environment
-            raise ConfigError(
-                f"{path} is YAML but PyYAML is not installed; install pyyaml or use JSON"
-            ) from exc
+        except ImportError as exc:
+            raise ConfigError(f"{path} is YAML but PyYAML is not installed; install pyyaml or use JSON") from exc
         loaded = yaml.safe_load(text) or {}
     else:
         try:
@@ -382,6 +351,8 @@ _ANNOTATIONS: dict[str, Any] = {
     "AgentsConfig": AgentsConfig,
     "ProvidersConfig": ProvidersConfig,
     "BackendsConfig": BackendsConfig,
+    "VoiceConfig": VoiceConfig,
+    "ChannelsConfig": ChannelsConfig,
     "SecurityConfig": SecurityConfig,
     "RepairConfig": RepairConfig,
     "WorkflowConfig": WorkflowConfig,
@@ -393,20 +364,4 @@ _ANNOTATIONS: dict[str, Any] = {
 }
 
 
-__all__ = [
-    "STRATEGY_WEIGHTS",
-    "AgentsConfig",
-    "AirvisConfig",
-    "BackendsConfig",
-    "ContextConfig",
-    "MCPConfig",
-    "MCPServerConfig",
-    "ProvidersConfig",
-    "RepairConfig",
-    "ReviewConfig",
-    "RoutingConfig",
-    "RoutingStrategy",
-    "SecurityConfig",
-    "StateConfig",
-    "WorkflowConfig",
-]
+__all__ = ["STRATEGY_WEIGHTS", "AgentsConfig", "AirvisConfig", "BackendsConfig", "ChannelsConfig", "ContextConfig", "MCPConfig", "MCPServerConfig", "ProvidersConfig", "RepairConfig", "ReviewConfig", "RoutingConfig", "RoutingStrategy", "SecurityConfig", "StateConfig", "VoiceConfig", "WorkflowConfig"]
