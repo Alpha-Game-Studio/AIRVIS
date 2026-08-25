@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 from ..core.config import AirvisConfig, ProvidersConfig
@@ -23,8 +24,28 @@ OPENAI_COMPATIBLE: dict[str, dict[str, Any]] = {
 LOCAL_ALIASES = {"local", "ollama"}
 
 
+def _load_setup_credentials(env: dict[str, str]) -> dict[str, str]:
+    """Load secrets created by ``airvis setup`` without overriding the shell."""
+    path = Path.home() / ".airvis" / "credentials.env"
+    if not path.is_file():
+        return env
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and value and not env.get(key):
+                env[key] = value
+    except OSError:
+        pass
+    return env
+
+
 def build_provider(provider_id: str, environ: dict[str, str] | None = None, *, timeout: float = 60.0, model: str = "") -> Provider:
-    env = dict(os.environ if environ is None else environ)
+    env = _load_setup_credentials(dict(os.environ if environ is None else environ))
     token = provider_id.strip().lower()
     if token in {"", "mock", "native", "airvis"}:
         return MockProvider()
@@ -50,7 +71,7 @@ def build_provider(provider_id: str, environ: dict[str, str] | None = None, *, t
 
 
 def discover_provider_ids(environ: dict[str, str] | None = None) -> list[str]:
-    env = dict(os.environ if environ is None else environ)
+    env = _load_setup_credentials(dict(os.environ if environ is None else environ))
     found: list[str] = []
     if env.get("OPENAI_API_KEY"): found.append("openai")
     if env.get("ANTHROPIC_API_KEY"): found.append("anthropic")
@@ -63,7 +84,7 @@ def discover_provider_ids(environ: dict[str, str] | None = None) -> list[str]:
 
 def build_provider_registry(config: AirvisConfig | ProvidersConfig | None = None, *, environ: dict[str, str] | None = None, health: Any = None, event_bus: Any = None) -> ProviderRegistry:
     providers_config = config.providers if isinstance(config, AirvisConfig) else (config or ProvidersConfig())
-    env = dict(os.environ if environ is None else environ)
+    env = _load_setup_credentials(dict(os.environ if environ is None else environ))
     registry = ProviderRegistry(health=health, event_bus=event_bus)
 
     explicit = bool(providers_config.default.strip())
@@ -96,7 +117,7 @@ def build_provider_registry(config: AirvisConfig | ProvidersConfig | None = None
 
 
 def provider_from_environment(environ: dict[str, str] | None = None) -> Provider:
-    env = dict(os.environ if environ is None else environ)
+    env = _load_setup_credentials(dict(os.environ if environ is None else environ))
     selected = env.get("AIRVIS_PROVIDER", "").strip()
     model = env.get("AIRVIS_MODEL", "").strip()
     if not selected:
