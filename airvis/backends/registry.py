@@ -7,7 +7,12 @@ import time
 from collections.abc import Iterable, Iterator
 from typing import Any
 
-from ..core.errors import BackendUnavailableError, DuplicateRegistrationError, UnknownBackendError
+from ..core.errors import (
+    BackendUnavailableError,
+    DuplicateRegistrationError,
+    ProviderError,
+    UnknownBackendError,
+)
 from ..core.events import EventBus, EventType
 from ..core.health import HealthRegistry, HealthState, HealthStatus
 from .base import Backend, ExecutionRequest, ExecutionResult
@@ -28,8 +33,6 @@ class BackendRegistry:
         self.event_bus = event_bus
         for backend in backends or ():
             self.register(backend)
-
-    # -- registration ----------------------------------------------------------
 
     def register(self, backend: Backend, *, replace: bool = True) -> Backend:
         if not isinstance(backend, Backend):
@@ -82,8 +85,6 @@ class BackendRegistry:
     def __contains__(self, backend_id: object) -> bool:
         return backend_id in self._backends
 
-    # -- routing ---------------------------------------------------------------
-
     def resolve(self, backend_id: str, *, exclude: Iterable[str] = ()) -> Backend:
         """Return the requested backend, honouring per-task exclusions."""
         excluded = set(exclude)
@@ -104,7 +105,13 @@ class BackendRegistry:
     async def execute(
         self, backend_id: str, request: ExecutionRequest, *, exclude: Iterable[str] = ()
     ) -> ExecutionResult:
-        """Execute through ``backend_id`` while recording health and events."""
+        """Execute through ``backend_id`` while recording backend health.
+
+        Provider failures are deliberately *not* recorded as backend failures.
+        Native is an orchestration backend that hosts providers; a provider
+        outage must not poison the native backend and make every subsequent
+        task unroutable. ProviderRegistry owns provider health and failover.
+        """
         backend = self.resolve(backend_id, exclude=exclude)
         if self.event_bus is not None:
             self.event_bus.publish(
@@ -121,6 +128,11 @@ class BackendRegistry:
         started = time.perf_counter()
         try:
             result = await backend.execute(request)
+        except ProviderError:
+            # ProviderRegistry has already recorded the provider failure and
+            # decides whether another provider can be used. Do not turn that
+            # failure into ``native unhealthy``.
+            raise
         except Exception as exc:
             self.health.record_failure(backend.id, str(exc))
             raise
@@ -155,8 +167,6 @@ class BackendRegistry:
             await backend.close()
 
 
-#: The router is the registry viewed through its routing API; the alias keeps
-#: the vocabulary of the architecture document without a second implementation.
 BackendRouter = BackendRegistry
 
 
