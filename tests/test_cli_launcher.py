@@ -40,7 +40,7 @@ def test_setup_writes_engine_and_metadata(monkeypatch, tmp_path):
     assert setup.run() == 0
     setup_data = json.loads(metadata.read_text(encoding="utf-8"))
     config = json.loads(engine_config.read_text(encoding="utf-8"))
-    assert setup_data["provider"] == "mock"
-    assert setup_data["channels"] == ["cli"]
-    assert config["providers"]["default"] == "mock"
+    assert setup_data["provider"] == "openrouter"
+    assert setup_data["channels"] == ["voice"]
+    assert config["providers"]["default"] == "openrouter"
     assert config["routing"]["strategy"] == "balanced"
