@@ -26,6 +26,39 @@ from airvis.security.permissions import PermissionManager, always_approve
 from airvis.tools.registry import ToolRegistry
 
 
+@pytest.fixture(autouse=True)
+def isolate_airvis_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Prevent developer machine configuration from changing test routing.
+
+    AIRVIS production intentionally reads ``~/.airvis`` and provider credentials.
+    The test suite must not accidentally inherit those settings, otherwise a
+    developer with OpenRouter/OpenClaw configured can make deterministic tests
+    route into the real network/backend.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    for name in (
+        "AIRVIS_CONFIG",
+        "AIRVIS_PROVIDER",
+        "AIRVIS_MODEL",
+        "AIRVIS_FALLBACK_PROVIDER",
+        "AIRVIS_PROVIDER_TIMEOUT",
+        "AIRVIS_BACKENDS",
+        "AIRVIS_CHANNELS",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "XAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_MODEL",
+        "OLLAMA_HOST",
+        "OLLAMA_MODEL",
+        "OPENCLAW_CLI",
+        "HERMES_CLI",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
     root = tmp_path / "workspace"
