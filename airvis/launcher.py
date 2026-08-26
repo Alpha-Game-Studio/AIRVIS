@@ -30,7 +30,8 @@ def _print_mapping(data: dict[str, Any], indent: int = 0) -> None:
 
 def render(payload: Any, command: str) -> None:
     if command == "status" and isinstance(payload, dict):
-        print("AIRVIS\n────────────────────────────────────────")
+        from . import __version__
+        print(f"AIRVIS {__version__.rsplit('.', 1)[0]}\n────────────────────────────────────────")
         print(f"Workspace    {payload.get('workspace', '-')}")
         print(f"Strategy     {payload.get('routing_strategy', '-')}")
         print(f"Planner      {payload.get('planner', '-')}")
