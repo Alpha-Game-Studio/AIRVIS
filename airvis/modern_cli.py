@@ -1,9 +1,8 @@
 """Product CLI for AIRVIS.
 
-The UX intentionally follows the conventions of modern agent CLIs: a first-run
-init flow, short discovery commands, an interactive prompt, slash commands,
-JSON/agent mode, and explicit model/voice configuration. Execution remains
-owned by the AIRVIS native engine; these commands are only a user-facing shell.
+The UX follows modern agent CLIs: first-run init, discovery commands,
+interactive prompting, slash commands, JSON/agent mode, and explicit
+model/voice configuration. Execution remains owned by the AIRVIS native engine.
 """
 from __future__ import annotations
 
@@ -31,20 +30,15 @@ def _load_setup() -> dict[str, Any]:
         return {}
 
 
-def _engine(workspace: str | None = None):
+def _engine(workspace: str | None = None, config_path: str | None = None):
     from .core.config import AirvisConfig
     from .engine import AirvisEngine
-    config = AirvisConfig.load(search_from=workspace)
+    config = AirvisConfig.load(config_path, search_from=workspace)
     return AirvisEngine(config, workspace=workspace)
 
 
 def _emit(value: Any, agent: bool) -> None:
-    if agent:
-        print(_json(value))
-    elif isinstance(value, (dict, list)):
-        print(_json(value))
-    else:
-        print(value)
+    print(_json(value) if agent or isinstance(value, (dict, list)) else value)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -162,7 +156,7 @@ DISCOVERY
   airvis list                         current configuration
   airvis platforms                    supported providers/channels
   airvis status | health | doctor     diagnostics
-  airvis model list                   available configured models
+  airvis model list                   configured model
   airvis actions list                 native tools
   airvis actions search <query>       find tools by name/description
   airvis actions knowledge <tool>     inspect a tool schema
@@ -172,10 +166,10 @@ WORK
   airvis chat <request>               one-shot request
   airvis research <request>           one-shot research/development request
   airvis flow run <request>           durable workflow
-  airvis mem add/search/list           local memory
+  airvis mem add/search/list          local memory
 
 VOICE
-  airvis voice                        microphone → STT → AIRVIS → ElevenLabs
+  airvis voice                        microphone -> STT -> AIRVIS -> ElevenLabs
   In the interactive shell: /voice
 
 AGENT MODE
@@ -198,15 +192,13 @@ def _model(args: argparse.Namespace, agent: bool) -> int:
         if not args.provider or not args.model:
             print("usage: airvis model config set <provider> <model>", file=sys.stderr)
             return 2
-        from .setup import _save_model, _env_file, _load
-        from .setup import WORKSPACE_CONFIG
+        from .setup import _save_model, _env_file, _load, WORKSPACE_CONFIG
         current = _load(WORKSPACE_CONFIG)
         existing = _load(SETUP_PATH)
         _save_model(args.provider, args.model, _env_file(), current, existing)
         return 0
     if args.model_command == "select":
-        from .setup import _save_model, _env_file, _load
-        from .setup import WORKSPACE_CONFIG
+        from .setup import _save_model, _env_file, _load, WORKSPACE_CONFIG
         current = _load(WORKSPACE_CONFIG)
         existing = _load(SETUP_PATH)
         _save_model(args.provider, args.model, _env_file(), current, existing)
@@ -214,8 +206,8 @@ def _model(args: argparse.Namespace, agent: bool) -> int:
     return 2
 
 
-def _actions(args: argparse.Namespace, agent: bool, workspace: str | None) -> int:
-    engine = _engine(workspace)
+def _actions(args: argparse.Namespace, agent: bool, workspace: str | None, config_path: str | None) -> int:
+    engine = _engine(workspace, config_path)
     try:
         tools = engine.tools
         if args.actions_command in (None, "list"):
@@ -246,8 +238,8 @@ def _actions(args: argparse.Namespace, agent: bool, workspace: str | None) -> in
         run_blocking(engine.close())
 
 
-def _flow(args: argparse.Namespace, agent: bool, workspace: str | None) -> int:
-    engine = _engine(workspace)
+def _flow(args: argparse.Namespace, agent: bool, workspace: str | None, config_path: str | None) -> int:
+    engine = _engine(workspace, config_path)
     try:
         from .core.asyncutil import run_blocking
         if args.flow_command == "run":
@@ -263,13 +255,15 @@ def _flow(args: argparse.Namespace, agent: bool, workspace: str | None) -> int:
         run_blocking(engine.close())
 
 
-def _memory(args: argparse.Namespace, agent: bool, workspace: str | None) -> int:
-    engine = _engine(workspace)
+def _memory(args: argparse.Namespace, agent: bool, workspace: str | None, config_path: str | None) -> int:
+    engine = _engine(workspace, config_path)
     try:
         if args.mem_command == "add":
             _emit({"id": engine.memory.add(args.content)}, agent)
         elif args.mem_command == "search":
-            _emit(engine.memory.search(args.query), agent)
+            query = args.query.lower()
+            matches = [item for item in engine.memory.list() if query in str(item.get("content", "")).lower()]
+            _emit(matches, agent)
         else:
             _emit(engine.memory.list(), agent)
         return 0
@@ -278,8 +272,8 @@ def _memory(args: argparse.Namespace, agent: bool, workspace: str | None) -> int
         run_blocking(engine.close())
 
 
-def _chat(message: str, workspace: str | None, voice: bool = False, seconds: float = 6.0, speak: bool = True) -> int:
-    engine = _engine(workspace)
+def _chat(message: str, workspace: str | None, config_path: str | None, voice: bool = False, seconds: float = 6.0, speak: bool = True) -> int:
+    engine = _engine(workspace, config_path)
     try:
         if voice:
             from .voice import run
@@ -293,7 +287,7 @@ def _chat(message: str, workspace: str | None, voice: bool = False, seconds: flo
         run_blocking(engine.close())
 
 
-def interactive(workspace: str | None) -> int:
+def interactive(workspace: str | None, config_path: str | None) -> int:
     print("AIRVIS — native AI agent")
     print("Type /help for commands, /voice for voice mode, /exit to quit.\n")
     while True:
@@ -310,17 +304,17 @@ def interactive(workspace: str | None) -> int:
             _guide(); continue
         if line == "/status":
             from .launcher import main
-            main(["status"]); continue
+            main(["--config", config_path, "status"] if config_path else ["status"]); continue
         if line == "/voice":
             try:
-                _chat("", workspace, voice=True)
+                _chat("", workspace, config_path, voice=True)
             except KeyboardInterrupt:
                 print("\n(interrupted)")
             continue
         if line == "/models":
             _model(argparse.Namespace(model_command="list"), False); continue
         try:
-            _chat(line, workspace)
+            _chat(line, workspace, config_path)
         except KeyboardInterrupt:
             print("\n(interrupted)")
     return 0
@@ -330,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     agent = bool(args.agent or args.json)
     if not args.command:
-        return interactive(args.workspace)
+        return interactive(args.workspace, args.config)
     if args.command in {"init", "setup"}:
         return _setup(None if args.command == "init" else "full")
     if args.command == "login":
@@ -349,23 +343,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "model":
         return _model(args, agent)
     if args.command == "actions":
-        return _actions(args, agent, args.workspace)
+        return _actions(args, agent, args.workspace, args.config)
     if args.command == "flow":
-        return _flow(args, agent, args.workspace)
+        return _flow(args, agent, args.workspace, args.config)
     if args.command in {"mem", "memory"}:
-        return _memory(args, agent, args.workspace)
+        return _memory(args, agent, args.workspace, args.config)
     if args.command == "voice":
-        return _chat("", args.workspace, voice=True, seconds=args.seconds, speak=not args.no_speak)
+        return _chat("", args.workspace, args.config, voice=True, seconds=args.seconds, speak=not args.no_speak)
     if args.command in {"chat", "research"}:
         message = " ".join(args.message if args.command == "chat" else [args.request]).strip()
         if not message:
-            return interactive(args.workspace)
-        return _chat(message, args.workspace)
+            return interactive(args.workspace, args.config)
+        return _chat(message, args.workspace, args.config)
     if args.command in {"status", "health", "doctor"}:
         from .launcher import main
         forwarded = [args.command]
-        if args.workspace:
-            forwarded = ["--workspace", args.workspace, *forwarded]
+        if args.workspace: forwarded = ["--workspace", args.workspace, *forwarded]
+        if args.config: forwarded = ["--config", args.config, *forwarded]
         return main(forwarded)
     return 2
 
