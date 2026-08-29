@@ -1,17 +1,133 @@
 # 🤖 AIRVIS 8.2 — Native AI Agent Operating System
 
-> **OpenClaw 같은 사용 경험을 목표로 하지만, 실행 엔진 자체는 AIRVIS가 소유하는 네이티브 에이전트 OS.**
+> **Research CLI / modern agent CLI 스타일의 사용 경험 + AIRVIS 네이티브 실행 엔진.**
 
-AIRVIS는 특정 외부 에이전트 런타임에 의존하지 않습니다. 계획, 에이전트 루프, 툴 실행, 세션, 컨텍스트, 검수와 복구를 AIRVIS 네이티브 엔진이 담당하고, Provider는 모델만 제공합니다.
+AIRVIS는 계획, 에이전트 루프, 툴 실행, 세션, 컨텍스트, 검수와 복구를 자체 엔진에서 처리합니다. Provider는 모델을 제공하고, CLI는 그 엔진을 직접 조작하는 제품 인터페이스입니다.
+
+## 🚀 설치
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+python -m pip install pytest pytest-asyncio pyyaml
+```
+
+음성 기능:
+
+```bash
+python -m pip install -e '.[voice]'
+```
+
+설치 후 어디서든:
+
+```bash
+airvis --help
+airvis --version
+airvis init
+```
+
+## 🖥️ CLI
+
+AIRVIS의 기본 실행 파일은 `airvis`입니다. 별도 더미 CLI가 아니라 현재 AIRVIS 엔진/Provider/Tool/State를 그대로 사용합니다.
+
+```bash
+# 첫 설정
+airvis init
+
+# 현재 연결/설정 확인
+airvis list
+airvis platforms
+airvis status
+airvis health
+airvis doctor
+
+# 모델
+airvis model list
+airvis model config show
+airvis model config set openrouter openai/gpt-5-mini
+airvis model select openrouter openai/gpt-5-mini
+
+# 에이전트 작업
+airvis
+# 또는
+airvis chat "현재 프로젝트 구조를 분석해줘"
+airvis research "버그를 찾아서 수정해줘"
+
+# 도구 discovery / 실행
+airvis actions list
+airvis actions search "git"
+airvis actions knowledge filesystem.read
+airvis actions execute filesystem.read '{"path":"README.md"}' --confirm
+
+# Durable workflow
+airvis flow run "프로젝트 테스트를 실행하고 실패 원인을 수정해줘"
+airvis flow list
+
+airvis flow status <workflow-id>
+
+# 메모리
+airvis mem add "프로젝트의 기본 브랜치는 main"
+airvis mem search "기본 브랜치"
+airvis mem list
+```
+
+### Interactive shell
+
+인자 없이 `airvis`를 실행하면 대화형 에이전트 셸이 열립니다.
+
+```text
+airvis — native AI agent
+Type /help for commands, /voice for voice mode, /exit to quit.
+
+you › 현재 프로젝트 구조를 분석해줘
+airvis › ...
+```
+
+슬래시 명령도 제공합니다.
+
+- `/help` — CLI 가이드
+- `/status` — 엔진 상태
+- `/models` — 현재 모델
+- `/voice` — 음성 모드
+- `/exit` — 종료
+
+### Agent/JSON mode
+
+다른 프로그램이나 AI Agent가 AIRVIS를 호출할 때는 구조화된 출력을 사용할 수 있습니다.
+
+```bash
+airvis --agent status
+airvis --agent platforms
+airvis --agent actions list
+airvis --agent chat "inspect this project"
+```
+
+## 🎙️ 음성 비서
+
+원할 때만 `voice` 채널을 사용합니다.
+
+```bash
+airvis voice
+```
+
+흐름은 실제 마이크 → STT → AIRVIS Native Engine → ElevenLabs TTS입니다.
+
+- STT: OpenAI Whisper API
+- TTS: ElevenLabs
+- macOS: `afplay`로 재생
+- 일반 채팅과 동일한 AIRVIS Agent/Tool/Permission/State 경로 사용
+
+API 키는 `~/.airvis/credentials.env`에 저장되며 setup에서 입력합니다. 음성 의존성은 기본 설치에 강제로 포함하지 않습니다.
 
 ## 🧠 핵심 구조
 
 ```text
 사용자
   ↓
-airvis setup / CLI / Channel
+airvis CLI / Voice / Channel
   ↓
-AIRVIS Orchestrator
+AIRVIS Native Orchestrator
   ├─ Planner / Task DAG
   ├─ Agent Router
   ├─ Native Agent Runtime
@@ -21,62 +137,46 @@ AIRVIS Orchestrator
   └─ Artifact / Event / State
           ↓
       Provider Layer
-   Ollama / OpenAI / Anthropic / Gemini / xAI / OpenRouter / Mock
+   Ollama / OpenAI / Anthropic / Gemini / xAI / OpenRouter
           ↓
         Model
 ```
 
-### 외부 런타임에 대한 원칙
+## 🔌 Provider / Setup
 
-`openclaw`와 `hermes`는 AIRVIS의 핵심 실행 엔진이 아닙니다. AIRVIS는 이들을 사용하지 않아도 완전히 동작해야 하며 기본 런타임은 항상 `native`입니다. 외부 CLI 통합은 향후 선택적 어댑터로 취급할 수 있지만, AIRVIS의 에이전트 루프를 외부 프로그램에 위임하지 않습니다.
-
-## ⚙️ `airvis setup`
-
-처음 실행하면 OpenClaw 스타일의 중앙 설정 경험으로 다음을 한 번에 구성합니다.
+`airvis init`은 Provider, 모델, fallback, Channel, Voice, orchestration 전략을 한 번에 구성합니다. 이후 필요한 영역만 다시 설정할 수 있습니다.
 
 ```bash
 airvis setup
+airvis login
+airvis model config set openrouter openai/gpt-5-mini
 ```
 
-설정 대상:
+외부 런타임을 AIRVIS의 실행 엔진으로 사용하지 않습니다. `openclaw` 등은 선택적인 연동 대상이며 기본 실행 권한은 AIRVIS Native Engine에 있습니다.
 
-- **Providers** — 기본 Provider와 fallback 체인
-- **Channels** — CLI / Telegram / Discord / Slack / Web / iMessage
-- **Orchestrator** — routing strategy, concurrency, review, auto-repair
-- **Plugins** — 네이티브 확장 목록
-- **Skills** — 재사용 가능한 능력/지침 팩
-- **Runtime** — 항상 AIRVIS Native Engine
+## 🧩 Tools / Plugins / Skills
 
-API 키는 설정 파일에 저장하지 않고 환경 변수로 관리합니다.
+AIRVIS의 CLI discovery는 실제 Tool Registry를 조회합니다.
 
 ```bash
-airvis status
-airvis health
-airvis doctor
-airvis chat "내 프로젝트의 구조를 분석하고 개선점을 알려줘"
+airvis actions list
+airvis plugins
+airvis skills
 ```
 
-기계가 읽는 JSON이 필요하면 `--json`을 사용합니다. 기본 CLI 출력은 사람이 읽는 자연어/요약 형태입니다.
+새 기능은 더미 응답을 추가하는 방식이 아니라 기존 registry, permission, provider, state 계층에 연결하는 방식으로 구현합니다.
 
-## 🏗️ 구성 요소
-
-* **Native Agent Runtime** — 에이전트 루프, 세션, 컨텍스트와 작업 실행을 AIRVIS 내부에서 처리합니다.
-* **Providers** — OpenAI / Anthropic / Gemini / xAI / OpenRouter / Ollama / custom / mock. 모델 호출과 capability를 담당합니다.
-* **Orchestrator** — 요청을 계획하고 DAG로 분해하며 에이전트를 라우팅하고 결과를 검수합니다.
-* **Agents** — researcher / debugger / architect / coder / tester / reviewer / committer / reporter / generalist.
-* **Tools** — filesystem, terminal, git, web, code analysis, test 등. 권한·위험도 정책을 거친 뒤 실행됩니다.
-* **Review / Repair** — 결과가 요구사항을 충족하지 못하면 재계획·재실행·수정 전략을 선택합니다.
-* **Memory / State** — SQLite 기반 상태와 세션을 유지하여 장기 실행 작업을 지원합니다.
-* **Plugins / Skills** — 네이티브 기능을 확장하는 모듈 계층입니다.
-* **Channels** — 같은 AIRVIS 에이전트를 CLI나 메시징/웹 채널에서 사용할 수 있도록 하는 입출력 계층입니다.
-
-## 🧪 개발
+## 🧪 테스트
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-pytest -q
+python -m pytest -q
+```
+
+테스트 의존성이 없는 새 가상환경에서는 먼저:
+
+```bash
+python -m pip install -e .
+python -m pip install pytest pytest-asyncio pyyaml
 ```
 
 ## 📜 라이선스
