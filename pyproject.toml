@@ -16,7 +16,9 @@ dependencies = [
 
 [project.optional-dependencies]
 yaml = ["PyYAML>=6"]
+voice = ["sounddevice>=0.5", "soundfile>=0.12"]
 test = ["pytest>=8", "pytest-asyncio>=0.23"]
+all = ["PyYAML>=6", "sounddevice>=0.5", "soundfile>=0.12", "pytest>=8", "pytest-asyncio>=0.23"]
 
 [project.scripts]
 airvis = "airvis.launcher:main"
