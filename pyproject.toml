@@ -21,7 +21,7 @@ test = ["pytest>=8", "pytest-asyncio>=0.23"]
 all = ["PyYAML>=6", "sounddevice>=0.5", "soundfile>=0.12", "pytest>=8", "pytest-asyncio>=0.23"]
 
 [project.scripts]
-airvis = "airvis.product_cli:main"
+airvis = "airvis.launcher:main"
 airvis-os = "airvis.agent_os_cli:main"
 airvis-claw = "airvis.openclaw_cli:main"
 
