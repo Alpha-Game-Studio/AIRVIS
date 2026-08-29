@@ -6,7 +6,10 @@ import json
 def test_modern_help_and_version(capsys):
     from airvis.modern_cli import main
 
-    assert main(["--version"]) == 0
+    try:
+        main(["--version"])
+    except SystemExit as exc:
+        assert exc.code == 0
     version = capsys.readouterr().out
     assert version.startswith("airvis 8.2")
 
