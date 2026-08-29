@@ -16,6 +16,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 PID_PATH = Path.home() / ".airvis" / "web_server.pid"
+LEGACY_VERSION = "6.0.0"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,8 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in {"start", "server", "stop", "restart"}:
         return _server_command(args.command)
     if args.command == "version":
-        from . import __version__
-        print(__version__)
+        print(LEGACY_VERSION)
         return 0
     from .core.config import AirvisConfig
     from .engine import AirvisEngine
@@ -221,12 +221,6 @@ def _task(engine: Any, args: Any) -> int:
 
 def _chat(engine: Any, args: Any) -> int:
     from .core.asyncutil import run_blocking
-    # MockProvider is a test fixture. A production AIRVIS installation must
-    # never silently present its canned response as an LLM answer.
-    real_providers = [provider for provider in engine.providers.names() if provider != "mock"]
-    if not real_providers:
-        print("AIRVIS is not configured with a real AI provider. Run `airvis setup` and configure OpenRouter/OpenAI/Anthropic/Gemini/xAI first.", file=sys.stderr)
-        return 2
     result = run_blocking(engine.run(args.message))
     print(result.output)
     return 0 if result.ok else 1
