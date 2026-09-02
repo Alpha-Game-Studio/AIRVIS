@@ -26,12 +26,12 @@ def get_current_engine() -> str:
 def set_current_engine(engine_name: str) -> str:
     global _current_engine
     e = engine_name.lower().strip()
-    if e in {"hermes", "에르메스", "nous", "nous-hermes"}:
+    if e in {"hermes", "에르메스", "nous", "nous-hermes", "hermes-agent"}:
         _current_engine = "hermes"
-        return "에르메스(Hermes)"
-    elif e in {"grok", "grokbot", "그록", "그록봇", "xai"}:
+        return "에르메스(Hermes Agent)"
+    elif e in {"grok", "grokbot", "그록", "그록봇", "xai", "grok-bot"}:
         _current_engine = "grokbot"
-        return "그록봇(Grokbot)"
+        return "그록봇(Grok Bot)"
     elif e in {"openclaw", "오픈클로", "claw", "clawbot"}:
         _current_engine = "openclaw"
         return "오픈클로(OpenClaw)"
@@ -57,7 +57,7 @@ def _http_chat_completion(
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        # Special header for OpenRouter
+        # Special headers for OpenRouter
         if "openrouter" in base_url.lower():
             headers["HTTP-Referer"] = "https://github.com/cuufi2fh-png/AIRVIS"
             headers["X-Title"] = "AIRVIS AI Assistant"
@@ -80,21 +80,25 @@ def _http_chat_completion(
                 if content:
                     return content.strip()
         else:
-            log.warning("HTTP chat completion error (%s): %s", response.status_code, response.text[:200])
+            log.warning(
+                "HTTP chat completion error (%s): %s",
+                response.status_code,
+                response.text[:200],
+            )
     except Exception as exc:
         log.warning("HTTP chat completion failed: %s", exc)
     return None
 
 
-# --- Hermes Engine ----------------------------------------------------------
+# --- Hermes Agent (Nous Research: https://hermes-agent.nousresearch.com/) ---
 
 def ask_hermes(command: str) -> str:
     """
-    Query Hermes (Nous Research) AI Engine.
-    Priority:
-      1. Direct API / OpenRouter / Ollama / Local API
-      2. OpenClaw with Hermes model / agent
-      3. Hermes CLI if available
+    Query Hermes Agent (Nous Research).
+    Supports:
+      1. Direct Nous Portal / OpenRouter / Ollama / Local API
+      2. Hermes CLI (`hermes`) if installed locally
+      3. OpenClaw with Nous Hermes model routing
       4. Fallback to OpenClaw default
     """
     command = command.strip()
@@ -103,9 +107,9 @@ def ask_hermes(command: str) -> str:
 
     system_prompt = env_str(
         "HERMES_SYSTEM_PROMPT",
-        "You are Hermes, a helpful, intelligent, and concise AI assistant. Reply in natural Korean.",
+        "You are Hermes Agent by Nous Research. You are autonomous, helpful, intelligent, and concise. Reply in natural Korean.",
     )
-    api_key = env_str("HERMES_API_KEY") or env_str("OPENROUTER_API_KEY")
+    api_key = env_str("HERMES_API_KEY") or env_str("OPENROUTER_API_KEY") or env_str("NOUS_API_KEY")
     base_url = env_str("HERMES_BASE_URL")
     model = env_str("HERMES_MODEL", "nousresearch/hermes-3-llama-3.1-405b")
 
@@ -135,23 +139,28 @@ def ask_hermes(command: str) -> str:
         if res:
             return res
 
-    # 3. Hermes CLI
-    cli = env_str("HERMES_CLI", "hermes")
-    if shutil.which(cli) is not None:
-        try:
-            completed = subprocess.run(
-                [cli, "chat", "--message", command],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=env_int("HERMES_TIMEOUT", 60),
-            )
-            if completed.returncode == 0 and completed.stdout.strip():
-                return completed.stdout.strip()
-        except Exception as exc:
-            log.warning("Hermes CLI failed: %s", exc)
+    # 3. Hermes CLI (https://hermes-agent.nousresearch.com/docs/getting-started/quickstart)
+    for cli_name in ("hermes", "hermes-agent"):
+        if shutil.which(cli_name) is not None:
+            for cli_args in (
+                [cli_name, "chat", "--message", command],
+                [cli_name, "--message", command],
+                [cli_name, command],
+            ):
+                try:
+                    completed = subprocess.run(
+                        cli_args,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=env_int("HERMES_TIMEOUT", 60),
+                    )
+                    if completed.returncode == 0 and completed.stdout.strip():
+                        return completed.stdout.strip()
+                except Exception as exc:
+                    log.warning("%s CLI invocation failed: %s", cli_name, exc)
 
-    # 4. OpenClaw with Hermes Model routing
+    # 4. OpenClaw with Nous Hermes Model routing
     cli_openclaw = env_str("OPENCLAW_CLI", "openclaw")
     if shutil.which(cli_openclaw) is not None:
         try:
@@ -191,14 +200,14 @@ def ask_hermes(command: str) -> str:
     return ask_openclaw(command)
 
 
-# --- Grokbot (xAI Grok) Engine ----------------------------------------------
+# --- Grok Bot (xAI: https://x.ai/news/introducing-grok-bot) ------------------
 
 def ask_grokbot(command: str) -> str:
     """
-    Query Grokbot (xAI Grok) AI Engine.
-    Priority:
-      1. xAI API / OpenRouter
-      2. Grokbot CLI if available
+    Query Grok Bot (xAI).
+    Supports:
+      1. xAI API (`https://api.x.ai/v1`, models `grok-2-latest`, `grok-beta`) / OpenRouter
+      2. Grokbot CLI (`grokbot`, `grok`) if installed
       3. OpenClaw with Grok model routing
       4. Fallback to OpenClaw default
     """
@@ -208,7 +217,7 @@ def ask_grokbot(command: str) -> str:
 
     system_prompt = env_str(
         "GROK_SYSTEM_PROMPT",
-        "You are Grok, an AI created by xAI. You are witty, knowledgeable, and helpful. Reply in natural Korean.",
+        "You are Grok Bot by xAI. You are intelligent, witty, knowledgeable, and helpful. Reply in natural Korean.",
     )
     api_key = env_str("XAI_API_KEY") or env_str("GROK_API_KEY") or env_str("OPENROUTER_API_KEY")
     base_url = env_str("GROK_BASE_URL")
@@ -237,18 +246,23 @@ def ask_grokbot(command: str) -> str:
     # 2. Grokbot CLI if installed
     for cli_name in ("grokbot", "grok"):
         if shutil.which(cli_name) is not None:
-            try:
-                completed = subprocess.run(
-                    [cli_name, "--message", command],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=env_int("GROK_TIMEOUT", 60),
-                )
-                if completed.returncode == 0 and completed.stdout.strip():
-                    return completed.stdout.strip()
-            except Exception as exc:
-                log.warning("Grokbot CLI failed: %s", exc)
+            for cli_args in (
+                [cli_name, "--message", command],
+                [cli_name, "chat", "--message", command],
+                [cli_name, command],
+            ):
+                try:
+                    completed = subprocess.run(
+                        cli_args,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=env_int("GROK_TIMEOUT", 60),
+                    )
+                    if completed.returncode == 0 and completed.stdout.strip():
+                        return completed.stdout.strip()
+                except Exception as exc:
+                    log.warning("%s CLI failed: %s", cli_name, exc)
 
     # 3. OpenClaw with Grok model routing
     cli_openclaw = env_str("OPENCLAW_CLI", "openclaw")
@@ -298,11 +312,11 @@ def ask_ai_engine(command: str, engine: str | None = None) -> str:
     """
     active = (engine or get_current_engine()).lower().strip()
 
-    if active in {"hermes", "에르메스"}:
-        log.info("Querying Hermes Engine: %s", command)
+    if active in {"hermes", "에르메스", "hermes-agent"}:
+        log.info("Querying Hermes Agent: %s", command)
         return ask_hermes(command)
-    elif active in {"grok", "grokbot", "그록", "그록봇"}:
-        log.info("Querying Grokbot Engine: %s", command)
+    elif active in {"grok", "grokbot", "그록", "그록봇", "grok-bot"}:
+        log.info("Querying Grok Bot: %s", command)
         return ask_grokbot(command)
     else:
         log.info("Querying OpenClaw Engine: %s", command)
