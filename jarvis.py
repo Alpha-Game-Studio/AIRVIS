@@ -36,7 +36,7 @@ import numpy as np
 import sounddevice as sd
 
 from config import env_bool, env_float, env_int, env_str
-from openclaw_bridge import ask_openclaw
+from engine_bridge import ask_ai_engine, get_current_engine, set_current_engine
 from speech import listen_and_transcribe, speak_text
 
 
@@ -408,20 +408,53 @@ def execute_local_command(command: str) -> str:
     return "해당 로컬 명령을 실행했습니다."
 
 
+def handle_engine_command(command: str) -> str | None:
+    """
+    Handle voice commands to dynamically check or switch AI engines (OpenClaw, Hermes, Grokbot).
+    """
+    c = command.lower().strip()
+    # Check engine switch
+    if "에르메스" in c or "hermes" in c:
+        if any(w in c for w in ("엔진", "바꿔", "변경", "스위치", "켜", "전환", "선택", "사용")):
+            name = set_current_engine("hermes")
+            return f"AI 엔진을 {name}로 변경했습니다."
+    if "그록" in c or "grok" in c:
+        if any(w in c for w in ("엔진", "바꿔", "변경", "스위치", "켜", "전환", "선택", "사용")):
+            name = set_current_engine("grokbot")
+            return f"AI 엔진을 {name}로 변경했습니다."
+    if "오픈클로" in c or "openclaw" in c:
+        if any(w in c for w in ("엔진", "바꿔", "변경", "스위치", "켜", "전환", "선택", "사용")):
+            name = set_current_engine("openclaw")
+            return f"AI 엔진을 {name}로 변경했습니다."
+    if "엔진" in c and any(w in c for w in ("뭐야", "무엇", "현재", "확인", "알려")):
+        cur = get_current_engine()
+        return f"현재 AI 엔진은 {cur}입니다."
+    return None
+
+
 def handle_command(command: str) -> str:
     """
-    Route command to either local handlers or the OpenClaw AI Agent.
+    Route command to engine switch, local handlers, or the active AI Engine.
     """
     command = command.strip()
     if not command:
         return JARVIS_STT_FAILURE_PROMPT
 
+    # 1. Dynamic AI Engine Switch
+    engine_switch_msg = handle_engine_command(command)
+    if engine_switch_msg:
+        log.info("Engine command executed: %s -> %s", command, engine_switch_msg)
+        return engine_switch_msg
+
+    # 2. Local Desktop Automation
     if is_local_command(command):
         log.info("Executing local desktop command: %s", command)
         return execute_local_command(command)
 
-    log.info("Routing command to OpenClaw: %s", command)
-    return ask_openclaw(command)
+    # 3. Active AI Engine Query (OpenClaw / Hermes / Grokbot)
+    active_engine = get_current_engine()
+    log.info("Routing command to [%s]: %s", active_engine, command)
+    return ask_ai_engine(command, engine=active_engine)
 
 
 # --- Voice Interaction Pipeline ---------------------------------------------
@@ -487,13 +520,13 @@ def main() -> int:
     spike_armed = True
 
     print("\n" + "=" * 60)
-    print(" 🤖 JARVIS × OpenClaw Voice Assistant Activated")
+    print(" 🤖 AIRVIS (Jarvis × Multi-AI Assistant) Activated")
     print("=" * 60)
     print(f" • Double Clap Trigger: 👏  👏  (Gap: {MIN_DOUBLE_GAP_S}s ~ {MAX_DOUBLE_GAP_S}s)")
     print(f" • Wake-up Prompt: \"{JARVIS_WAKE_PROMPT}\"")
     print(f" • Conversation Mode: {'ON' if JARVIS_CONVERSATION_MODE else 'OFF'}")
+    print(f" • Active AI Engine: {get_current_engine().upper()} (OpenClaw / Hermes / Grokbot)")
     print(f" • STT Provider: {env_str('JARVIS_STT_PROVIDER', 'speech_recognition / google')}")
-    print(f" • OpenClaw Agent: {env_str('OPENCLAW_AGENT', 'main')}")
     print("=" * 60 + "\n")
 
     input_idx = _choose_input_device(blocksize)
