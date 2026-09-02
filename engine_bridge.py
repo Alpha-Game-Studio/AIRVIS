@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from config import env_bool, env_int, env_str
@@ -38,6 +39,29 @@ def set_current_engine(engine_name: str) -> str:
     else:
         _current_engine = e
         return engine_name
+
+
+def _find_local_binary(names: list[str]) -> str | None:
+    """Find a local executable across system PATH and standard user installation directories."""
+    home = Path.home()
+    custom_paths = [
+        home / ".hermes" / "bin",
+        home / ".local" / "bin",
+        home / "bin",
+        Path("/opt/homebrew/bin"),
+        Path("/usr/local/bin"),
+    ]
+    for name in names:
+        # Check standard PATH
+        found = shutil.which(name)
+        if found:
+            return found
+        # Check standard local directories
+        for p in custom_paths:
+            candidate = p / name
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+    return None
 
 
 def _http_chat_completion(
@@ -90,30 +114,55 @@ def _http_chat_completion(
     return None
 
 
-# --- Hermes Agent (Nous Research: https://hermes-agent.nousresearch.com/) ---
+# --- Hermes Agent (Nous Research: https://hermes-agent.nousresearch.com/docs) ---
 
 def ask_hermes(command: str) -> str:
     """
     Query Hermes Agent (Nous Research).
-    Supports:
-      1. Direct Nous Portal / OpenRouter / Ollama / Local API
-      2. Hermes CLI (`hermes`) if installed locally
-      3. OpenClaw with Nous Hermes model routing
-      4. Fallback to OpenClaw default
+    Priority:
+      1. Local Hermes CLI (`hermes`, `hermes-agent`) if installed on host
+      2. Direct Nous Portal / OpenRouter / Ollama / Local API
+      3. OpenClaw with Hermes model routing (if OpenClaw is running)
+      4. Safe fallback message without crashing
     """
     command = command.strip()
     if not command:
         return "명령을 인식하지 못했습니다."
 
-    system_prompt = env_str(
-        "HERMES_SYSTEM_PROMPT",
-        "You are Hermes Agent by Nous Research. You are autonomous, helpful, intelligent, and concise. Reply in natural Korean.",
-    )
+    timeout = env_int("HERMES_TIMEOUT", 60)
+
+    # 1. Check local Hermes CLI
+    hermes_bin = _find_local_binary(["hermes", "hermes-agent"])
+    if hermes_bin:
+        # Try standard Hermes CLI invocation modes
+        for args in (
+            [hermes_bin, "chat", "--message", command],
+            [hermes_bin, "--message", command],
+            [hermes_bin, "run", command],
+            [hermes_bin, command],
+        ):
+            try:
+                completed = subprocess.run(
+                    args,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+                if completed.returncode == 0 and completed.stdout.strip():
+                    return completed.stdout.strip()
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                log.warning("Hermes CLI error: %s", exc)
+
+    # 2. Check Direct API / OpenRouter / Nous Portal / Local Endpoint
     api_key = env_str("HERMES_API_KEY") or env_str("OPENROUTER_API_KEY") or env_str("NOUS_API_KEY")
     base_url = env_str("HERMES_BASE_URL")
     model = env_str("HERMES_MODEL", "nousresearch/hermes-3-llama-3.1-405b")
+    system_prompt = env_str(
+        "HERMES_SYSTEM_PROMPT",
+        "You are Hermes Agent by Nous Research. You are autonomous, highly intelligent, and concise. Reply in natural Korean.",
+    )
 
-    # 1. Direct API if configured
     if api_key:
         if not base_url:
             base_url = "https://openrouter.ai/api/v1"
@@ -123,11 +172,11 @@ def ask_hermes(command: str) -> str:
             model=model,
             system_prompt=system_prompt,
             user_prompt=command,
+            timeout=timeout,
         )
         if res:
             return res
 
-    # 2. Local Ollama / vLLM if base_url is specified without key
     if base_url:
         res = _http_chat_completion(
             base_url=base_url,
@@ -135,38 +184,18 @@ def ask_hermes(command: str) -> str:
             model=model,
             system_prompt=system_prompt,
             user_prompt=command,
+            timeout=timeout,
         )
         if res:
             return res
 
-    # 3. Hermes CLI (https://hermes-agent.nousresearch.com/docs/getting-started/quickstart)
-    for cli_name in ("hermes", "hermes-agent"):
-        if shutil.which(cli_name) is not None:
-            for cli_args in (
-                [cli_name, "chat", "--message", command],
-                [cli_name, "--message", command],
-                [cli_name, command],
-            ):
-                try:
-                    completed = subprocess.run(
-                        cli_args,
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                        timeout=env_int("HERMES_TIMEOUT", 60),
-                    )
-                    if completed.returncode == 0 and completed.stdout.strip():
-                        return completed.stdout.strip()
-                except Exception as exc:
-                    log.warning("%s CLI invocation failed: %s", cli_name, exc)
-
-    # 4. OpenClaw with Nous Hermes Model routing
-    cli_openclaw = env_str("OPENCLAW_CLI", "openclaw")
-    if shutil.which(cli_openclaw) is not None:
+    # 3. Route through local OpenClaw gateway if available
+    openclaw_bin = _find_local_binary(["openclaw"])
+    if openclaw_bin:
         try:
             completed = subprocess.run(
                 [
-                    cli_openclaw,
+                    openclaw_bin,
                     "agent",
                     "--agent",
                     env_str("HERMES_OPENCLAW_AGENT", "main"),
@@ -176,12 +205,12 @@ def ask_hermes(command: str) -> str:
                     command,
                     "--json",
                     "--timeout",
-                    str(env_int("HERMES_TIMEOUT", 120)),
+                    str(timeout),
                 ],
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=env_int("HERMES_TIMEOUT", 120) + 5,
+                timeout=timeout + 5,
             )
             if completed.returncode == 0 and completed.stdout.strip():
                 from openclaw_bridge import _extract_text_from_json
@@ -194,36 +223,59 @@ def ask_hermes(command: str) -> str:
                 except Exception:
                     return completed.stdout.strip()
         except Exception as exc:
-            log.warning("OpenClaw Hermes routing failed: %s", exc)
+            log.warning("OpenClaw Hermes routing error: %s", exc)
 
-    # 5. Default OpenClaw fallback
-    return ask_openclaw(command)
+    # 4. If all fail, return clean notification
+    return "에르메스 에이전트에 연결할 수 없습니다. hermes CLI 설치 또는 HERMES_API_KEY 설정을 확인해주세요."
 
 
-# --- Grok Bot (xAI: https://x.ai/news/introducing-grok-bot) ------------------
+# --- Grok Bot (xAI: https://docs.x.ai/grok-bot/overview) ---------------------
 
 def ask_grokbot(command: str) -> str:
     """
     Query Grok Bot (xAI).
-    Supports:
-      1. xAI API (`https://api.x.ai/v1`, models `grok-2-latest`, `grok-beta`) / OpenRouter
-      2. Grokbot CLI (`grokbot`, `grok`) if installed
-      3. OpenClaw with Grok model routing
-      4. Fallback to OpenClaw default
+    Priority:
+      1. Local Grok Bot CLI (`grokbot`, `grok`) if installed on host
+      2. Direct xAI API (`https://api.x.ai/v1`, models `grok-4.20-multi-agent`, `grok-2-latest`) / OpenRouter
+      3. OpenClaw with Grok model routing (if OpenClaw is running)
+      4. Safe fallback message without crashing
     """
     command = command.strip()
     if not command:
         return "명령을 인식하지 못했습니다."
 
-    system_prompt = env_str(
-        "GROK_SYSTEM_PROMPT",
-        "You are Grok Bot by xAI. You are intelligent, witty, knowledgeable, and helpful. Reply in natural Korean.",
-    )
+    timeout = env_int("GROK_TIMEOUT", 60)
+
+    # 1. Check local Grok Bot CLI
+    grok_bin = _find_local_binary(["grokbot", "grok"])
+    if grok_bin:
+        for args in (
+            [grok_bin, "--message", command],
+            [grok_bin, "chat", "--message", command],
+            [grok_bin, command],
+        ):
+            try:
+                completed = subprocess.run(
+                    args,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+                if completed.returncode == 0 and completed.stdout.strip():
+                    return completed.stdout.strip()
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                log.warning("Grok Bot CLI error: %s", exc)
+
+    # 2. Direct xAI API / OpenRouter
     api_key = env_str("XAI_API_KEY") or env_str("GROK_API_KEY") or env_str("OPENROUTER_API_KEY")
     base_url = env_str("GROK_BASE_URL")
     model = env_str("GROK_MODEL", "grok-2-latest")
+    system_prompt = env_str(
+        "GROK_SYSTEM_PROMPT",
+        "You are Grok Bot by xAI. You are an autonomous, intelligent, witty, and concise AI teammate. Reply in natural Korean.",
+    )
 
-    # 1. Direct xAI API / OpenRouter
     if api_key:
         if not base_url:
             if api_key.startswith("xai-"):
@@ -239,38 +291,18 @@ def ask_grokbot(command: str) -> str:
             model=model,
             system_prompt=system_prompt,
             user_prompt=command,
+            timeout=timeout,
         )
         if res:
             return res
 
-    # 2. Grokbot CLI if installed
-    for cli_name in ("grokbot", "grok"):
-        if shutil.which(cli_name) is not None:
-            for cli_args in (
-                [cli_name, "--message", command],
-                [cli_name, "chat", "--message", command],
-                [cli_name, command],
-            ):
-                try:
-                    completed = subprocess.run(
-                        cli_args,
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                        timeout=env_int("GROK_TIMEOUT", 60),
-                    )
-                    if completed.returncode == 0 and completed.stdout.strip():
-                        return completed.stdout.strip()
-                except Exception as exc:
-                    log.warning("%s CLI failed: %s", cli_name, exc)
-
-    # 3. OpenClaw with Grok model routing
-    cli_openclaw = env_str("OPENCLAW_CLI", "openclaw")
-    if shutil.which(cli_openclaw) is not None:
+    # 3. Route through local OpenClaw gateway if available
+    openclaw_bin = _find_local_binary(["openclaw"])
+    if openclaw_bin:
         try:
             completed = subprocess.run(
                 [
-                    cli_openclaw,
+                    openclaw_bin,
                     "agent",
                     "--agent",
                     env_str("GROK_OPENCLAW_AGENT", "main"),
@@ -280,12 +312,12 @@ def ask_grokbot(command: str) -> str:
                     command,
                     "--json",
                     "--timeout",
-                    str(env_int("GROK_TIMEOUT", 120)),
+                    str(timeout),
                 ],
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=env_int("GROK_TIMEOUT", 120) + 5,
+                timeout=timeout + 5,
             )
             if completed.returncode == 0 and completed.stdout.strip():
                 from openclaw_bridge import _extract_text_from_json
@@ -298,10 +330,10 @@ def ask_grokbot(command: str) -> str:
                 except Exception:
                     return completed.stdout.strip()
         except Exception as exc:
-            log.warning("OpenClaw Grok routing failed: %s", exc)
+            log.warning("OpenClaw Grok routing error: %s", exc)
 
-    # 4. Default OpenClaw fallback
-    return ask_openclaw(command)
+    # 4. If all fail, return clean notification
+    return "그록봇에 연결할 수 없습니다. xAI API 키 또는 grokbot 설정을 확인해주세요."
 
 
 # --- Unified AI Engine Dispatcher -------------------------------------------
